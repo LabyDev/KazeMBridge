@@ -89,18 +89,20 @@ Note: there is currently no known way to list which operatorIds are registered o
 ```json
 {
   "apiVer": "1.0",
+  "command": "<commandName>",
   "deviceId": "<your-device-id>",
   "operatorId": "<your-registered-uuid>",
   "timestamp": <unix seconds>
 }
 ```
 
-| Field        | Description                                                 |
-| ------------ | ----------------------------------------------------------- |
-| `apiVer`     | Always `"1.0"` (exception: `setOptionSetting` uses `"1.1"`) |
-| `deviceId`   | Any consistent string identifying your client               |
-| `operatorId` | Your registered UUID                                        |
-| `timestamp`  | Unix timestamp (seconds)                                    |
+| Field        | Description                                                                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apiVer`     | Always `"1.0"` (exception: `setOptionSetting` uses `"1.1"`)                                                                                                  |
+| `command`    | Must match the URL path exactly e.g. `"setAirconStat"`. Required even though it's also in the URL. Omitting it returns `result: 1` regardless of auth state. |
+| `deviceId`   | Any consistent string identifying your client                                                                                                                |
+| `operatorId` | Your registered UUID                                                                                                                                         |
+| `timestamp`  | Unix timestamp (seconds)                                                                                                                                     |
 
 ---
 
