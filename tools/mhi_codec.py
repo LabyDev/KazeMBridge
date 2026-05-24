@@ -152,11 +152,24 @@ def encode(operation: int, mode: int, temp: float,
 
 
 if __name__ == '__main__':
-    blob = "AAcAEjD/AACAAAACAAAAAAAAAf/////R/IEEAQcqowAAiAAAAwAAAAAAAAOAIKP/gBDT/5QQAADX/g=="
+    blob = "AACij6r/AAAAAAATigAAAAAAAf////8ZR4EEAAcqogAAiAAAAwAAAAAAAAOAIKL/gBDP/5QQAAA2cg=="
     print("=== decode ===")
     print(json.dumps(decode(blob), indent=2))
-
-    print("\n=== encode (auto, 21°C, fan auto, swing vert, swing horiz) ===")
-    b64 = encode(operation=1, mode=0, temp=21.0, fan=0, wind_ud=0, wind_lr=0)
+    
+    # encode(operation, mode, temp, fan, wind_ud, wind_lr)
+    #
+    # operation : 1=ON, 0=OFF
+    # mode      : 0=auto, 1=cool, 2=heat, 3=fan, 4=dry
+    # temp      : 16.0–31.0 in 0.5 steps (ignored in fan mode, forced to 25.0)
+    # fan       : 0=auto, 1=slow, 2=med-slow, 3=med-fast, 4=fast
+    # wind_ud   : 0=swing, 1=top, 2=mid-top, 3=mid-bot, 4=bottom
+    # wind_lr   : 0=swing, 1–7=positions left to right
+    #
+    # Examples:
+    #   encode(1, 0, 21.0, 0, 0, 0)   # ON, auto, 21°C, fan auto, both swing
+    #   encode(0, 0, 21.0, 0, 0, 0)   # OFF, everything else same
+    #   encode(1, 1, 22.0, 2, 3, 0)   # ON, cool, 22°C, fan med-slow, vert mid-bot, horiz swing
+    #   encode(1, 2, 20.0, 1, 4, 4)   # ON, heat, 20°C, fan slow, vert bottom, horiz pos 4
+    b64 = encode(operation=1, mode=0, temp=21.0, fan=0, wind_ud=1, wind_lr=4)
     print(b64)
     print(json.dumps(decode(b64), indent=2))
