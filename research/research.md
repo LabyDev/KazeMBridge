@@ -278,8 +278,6 @@ Single `airconId` string in contents.
 
 ### Local Wi-Fi response
 
-Flat `contents` object for the single queried device.
-
 ```json
 {
   "result": 0,
@@ -305,11 +303,9 @@ Flat `contents` object for the single queried device.
 
 > `indoorTemp` and `outdoorTemp` are **not** JSON fields in the local response. They are embedded in the `airconStat` blob as receive half extension tuples — see Aircon Stat Encoding.
 
-````
-
 ### Cloud response
 
-`contents` is a **map keyed by `airconId`**, one entry per queried device. Each entry contains the decoded AC state fields — the binary blob is already parsed server-side.
+`contents` is a **map keyed by `airconId`**, one entry per queried device.
 
 ```json
 {
@@ -339,54 +335,48 @@ Flat `contents` object for the single queried device.
     }
   }
 }
-````
-
-> Note: the cloud response returns decoded scalar fields (`operation`, `operationMode`, per-mode temps, etc.) rather than the raw `airconStat` base64 blob. The local Wi-Fi response returns the raw blob which must be decoded client-side.
-
-````
+```
 
 ### Local Wi-Fi response fields
 
-| Field | Description |
-|---|---|
-| `airconStat` | Base64-encoded binary state blob — see Aircon Stat Encoding |
-| `ledStat` | `1` = LED on, `0` = off (integer) |
-| `autoHeating` | `1` = frost protection on, `0` = off (integer) |
-| `highTemp` | Upper alert threshold — **hex string** e.g. `"AB"` = 0xAB = 171. Parse with `int(v, 16)` |
-| `lowTemp` | Lower alert threshold — same hex string encoding |
-| `numOfAccount` | Number of operatorIds currently registered |
-| `remoteList` | Always empty strings — registered operatorIds are not exposed |
-| `logStat` | Log status flag |
-| `updatedBy` | Who last updated state — `"local"` or `"aircon"` |
-| `expires` | Unix timestamp (seconds) when state expires |
-| `timezone` | IANA timezone string |
-| `firmType` | Adapter firmware type string |
-| `wireless.firmVer` | Wi-Fi adapter firmware version |
-| `mcu.firmVer` | AC MCU firmware version |
-
-> `indoorTemp` and `outdoorTemp` are embedded in the `airconStat` blob extension tuples, not separate JSON fields. See Aircon Stat Encoding → Receive half extension tuples.
+| Field              | Description                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `airconStat`       | Base64-encoded binary state blob — see Aircon Stat Encoding                              |
+| `ledStat`          | `1` = LED on, `0` = off                                                                  |
+| `autoHeating`      | `1` = frost protection on, `0` = off                                                     |
+| `highTemp`         | Upper alert threshold — **hex string** e.g. `"AB"` = 0xAB = 171. Parse with `int(v, 16)` |
+| `lowTemp`          | Lower alert threshold — same hex string encoding                                         |
+| `numOfAccount`     | Number of operatorIds currently registered                                               |
+| `remoteList`       | Always empty strings — registered operatorIds are not exposed                            |
+| `logStat`          | Log status flag                                                                          |
+| `updatedBy`        | Who last updated state — `"local"` or `"aircon"`                                         |
+| `expires`          | Unix timestamp (seconds) when state expires                                              |
+| `timezone`         | IANA timezone string                                                                     |
+| `firmType`         | Adapter firmware type string                                                             |
+| `wireless.firmVer` | Wi-Fi adapter firmware version                                                           |
+| `mcu.firmVer`      | AC MCU firmware version                                                                  |
 
 ### Cloud response fields (per AC entry)
 
-| Field | Type | Description |
-|---|---|---|
-| `operation` | Integer | `1` = on, `0` = off |
-| `operationMode` | Integer | `0`=auto, `1`=cool, `2`=heat, `3`=fan, `4`=dry |
-| `coolTemp` | Double | Cool mode setpoint °C |
-| `hotTemp` | Double | Heat mode setpoint °C |
-| `autoTemp` | Double | Auto mode setpoint °C |
-| `dryTemp` | Double | Dry mode setpoint °C |
-| `airFlow` | Integer | `0`=auto, `1`–`4`=speeds |
-| `windDirectionUD` | Integer | `0`=swing, `1`–`4`=positions |
-| `windDirectionLR` | Integer | `0`=swing, `1`–`7`=positions |
-| `indoorTemp` | Double | Indoor temperature °C |
-| `outdoorTemp` | Double | Outdoor temperature °C |
-| `entrust` | Integer | `0`=off, `1`=on |
-| `statReceiveDate` | Long | Unix ms timestamp of last state report |
-| `isPresetTempAutoForAuto/Cool/Hot/Dry` | Boolean | Per-mode preset temp auto flag |
-| `firmType` | String | Adapter firmware type |
-| `wireless.firmVer` | String | Wi-Fi adapter firmware version |
-| `mcu.firmVer` | String | AC MCU firmware version |
+| Field                                  | Type    | Description                                    |
+| -------------------------------------- | ------- | ---------------------------------------------- |
+| `operation`                            | Integer | `1` = on, `0` = off                            |
+| `operationMode`                        | Integer | `0`=auto, `1`=cool, `2`=heat, `3`=fan, `4`=dry |
+| `coolTemp`                             | Double  | Cool mode setpoint °C                          |
+| `hotTemp`                              | Double  | Heat mode setpoint °C                          |
+| `autoTemp`                             | Double  | Auto mode setpoint °C                          |
+| `dryTemp`                              | Double  | Dry mode setpoint °C                           |
+| `airFlow`                              | Integer | `0`=auto, `1`–`4`=speeds                       |
+| `windDirectionUD`                      | Integer | `0`=swing, `1`–`4`=positions                   |
+| `windDirectionLR`                      | Integer | `0`=swing, `1`–`7`=positions                   |
+| `indoorTemp`                           | Double  | Indoor temperature °C                          |
+| `outdoorTemp`                          | Double  | Outdoor temperature °C                         |
+| `entrust`                              | Integer | `0`=off, `1`=on                                |
+| `statReceiveDate`                      | Long    | Unix ms timestamp of last state report         |
+| `isPresetTempAutoForAuto/Cool/Hot/Dry` | Boolean | Per-mode preset temp auto flag                 |
+| `firmType`                             | String  | Adapter firmware type                          |
+| `wireless.firmVer`                     | String  | Wi-Fi adapter firmware version                 |
+| `mcu.firmVer`                          | String  | AC MCU firmware version                        |
 
 ---
 
@@ -407,7 +397,7 @@ Sets the AC state. Takes the same base64-encoded binary blob returned by `getAir
     "airconStat": "<base64>"
   }
 }
-````
+```
 
 ### Response
 
@@ -430,8 +420,6 @@ Sets the AC state. Takes the same base64-encoded binary blob returned by `getAir
 ## setNetworkInfo
 
 Configures WiFi network settings on the adapter. Used during initial setup only.
-
-### Request (inferred from source)
 
 ```json
 {
@@ -465,14 +453,9 @@ These commands go to `https://spa.smartmair.com/server/<command>`, not to the lo
 
 ## setOptionSetting (Cloud only)
 
-> ☁️ **Cloud API only** — sends to `https://spa.smartmair.com/server/setOptionSetting`. Not available over local Wi-Fi.
-
-Configures device options, alert/notification settings, and optionally pushes a new AC state in the same call.
-
-### Request
+> ☁️ **Cloud API only** — sends to `https://spa.smartmair.com/server/setOptionSetting`.
 
 ```json
-POST https://spa.smartmair.com/server/setOptionSetting
 {
   "apiVer": "1.1",
   "operatorId": "<uuid>",
@@ -495,16 +478,6 @@ POST https://spa.smartmair.com/server/setOptionSetting
 }
 ```
 
-### Response
-
-```json
-{
-  "result": 0
-}
-```
-
-### Field reference
-
 | Field                  | Type    | Nullable | Notes                                                                                                |
 | ---------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------- |
 | `apiVer`               | String  | —        | **`"1.1"`** — differs from all other commands                                                        |
@@ -520,9 +493,7 @@ POST https://spa.smartmair.com/server/setOptionSetting
 | `lowTemp`              | Integer | yes      | Lower alert threshold, raw value 0–52. Only sent for models that support `tempInformation`           |
 | `airconStat`           | String  | yes      | Optional base64 blob — include to update AC state atomically with options                            |
 
-> **Note on `highTemp`/`lowTemp`:** the range 0–52 is a raw device encoding, not degrees. The app converts to/from °C or °F for display. The exact conversion is not yet confirmed.
-
-> **Note on `airconName`:** must be Base64-encoded. Example: `"Living Room"` → `base64("Living Room".encode("utf-8"))` → `"TGl2aW5nIFJvb20="`.
+> **Note on `airconName`:** must be Base64-encoded. Example: `"Living Room"` → `"TGl2aW5nIFJvb20="`.
 
 ### Result codes
 
@@ -540,13 +511,15 @@ POST https://spa.smartmair.com/server/setOptionSetting
 
 ## Aircon Stat Encoding
 
+> **Source:** verified against decompiled `AirconStatCoder.java` from `jp.co.mhi_mth.smartmair`.
+
 The `airconStat` base64 string encodes a command half and a receive half concatenated:
 
 ```
 base64( [command_half] + [receive_half] )
 ```
 
-### Command half structure (25 bytes minimum)
+### Command half structure
 
 ```
 [18 bytes payload] + [variable trailer] + [2 bytes CRC16]
@@ -554,13 +527,15 @@ base64( [command_half] + [receive_half] )
 
 The trailer is `[0x01, 0xFF, 0xFF, 0xFF, 0xFF]` for most models. For models with home leave mode the trailer is variable-length — see Encoder Notes below.
 
-### Receive half structure (variable length)
+### Receive half structure
 
 The receive half returned by the **device** is longer than 25 bytes because the AC appends sensor extension data:
 
 ```
 [18 bytes payload] + [1 byte count] + [count × 4 byte tuples] + [2 bytes CRC16]
 ```
+
+The receive half trailer written by the **app** (when encoding a command) is always the fixed `[0x01, 0xFF, 0xFF, 0xFF, 0xFF]` regardless of model.
 
 Real device example (58 bytes total blob):
 
@@ -569,7 +544,7 @@ Real device example (58 bytes total blob):
 
 ### Receive half extension tuples
 
-Each tuple is `[code, sub_code, value, 0xFF]`. Known codes from real device:
+Each tuple is `[code, sub_code, value, 0xFF]`. Known codes:
 
 | Code   | Sub    | Meaning                                                                   |
 | ------ | ------ | ------------------------------------------------------------------------- |
@@ -577,20 +552,7 @@ Each tuple is `[code, sub_code, value, 0xFF]`. Known codes from real device:
 | `0x80` | `0x10` | Outdoor temperature — `value` is index into `outdoor_temp[]` lookup table |
 | `0x94` | `0x10` | Unknown (possibly error/status code)                                      |
 
-Example from real device: count=3, indoor=`0x99`→23.5°C, outdoor=`0xAB`→20.0°C.
-
-> This is why `indoorTemp`/`outdoorTemp` are **not** separate JSON fields in the local Wi-Fi `getAirconStat` response — they're embedded in the blob extension data. Parse them from the receive half extension tuples, not the JSON envelope.
-
-### highTemp / lowTemp encoding
-
-In the `getAirconStat` response JSON, `highTemp` and `lowTemp` are **hex-encoded strings**, not integers:
-
-```json
-"highTemp": "AB",
-"lowTemp": "66"
-```
-
-Parse with `int(value, 16)` to get the raw integer (0–255 range).
+> `indoorTemp`/`outdoorTemp` are **not** JSON fields in the local response — they are only accessible by parsing these tuples from the receive half.
 
 ### CRC
 
@@ -600,36 +562,38 @@ CRC-16/CCITT (init `0xFFFF`, poly `0x1021`), covers all bytes before the CRC, ap
 
 ### Command half — byte map (18 bytes)
 
+Initialised from `command_init = {0,0,0,0,0,255,0,0,0,0,0,0,0,0,0,0,0,0}` — byte 5 is always `0xFF`.
+
 #### Byte 0 — Model type
 
-| Value  | Model                   |
-| ------ | ----------------------- |
-| `0x00` | Separate 2021 (default) |
-| `0x01` | Global 2022             |
-| `0x02` | High-end Japanese 2023  |
-| `0x03` | ZT 2025                 |
-| `0x40` | FDT 2023                |
+| Value  | Model                   | Source constant                                   |
+| ------ | ----------------------- | ------------------------------------------------- |
+| `0x00` | Separate 2021 (default) | `STATUS_MODEL_NO_TYPE_SEPARATE_2021`              |
+| `0x01` | Global 2022             | `STATUS_MODEL_NO_TYPE_GLOBAL_2022`                |
+| `0x02` | High-end Japanese 2023  | `STATUS_MODEL_NO_TYPE_HIGH_END_FOR_JAPANESE_2023` |
+| `0x03` | ZT 2025                 | `STATUS_MODEL_NO_TYPE_ZT_2025`                    |
+| `0x40` | FDT 2023                | `STATUS_MODEL_NO_TYPE_FDT_2023`                   |
 
-#### Byte 2 — Operation, mode, auto-swing
+#### Byte 2 — Operation + mode + vertical swing
 
-**Operation (bits 0–1):**
+**Operation (bits 0–1)** — from `op_p_on/op_p_of`:
 
 | Value  | Meaning |
 | ------ | ------- |
 | `0x02` | OFF     |
 | `0x03` | ON      |
 
-**Mode (bits 2–5):**
+**Mode (bits 2–5)** — from `om_p_*` arrays. Japanese abbreviations: re=冷房(cool), dn=暖房(heat), so=送風(fan), jo=除湿(dry):
 
-| Value  | Mode     |
-| ------ | -------- |
-| `0x20` | Auto     |
-| `0x28` | Cool     |
-| `0x30` | Heat     |
-| `0x2C` | Fan only |
-| `0x24` | Dry      |
+| Value  | Mode     | Source    |
+| ------ | -------- | --------- |
+| `0x20` | Auto     | `om_p_au` |
+| `0x28` | Cool     | `om_p_re` |
+| `0x30` | Heat     | `om_p_dn` |
+| `0x2C` | Fan only | `om_p_so` |
+| `0x24` | Dry      | `om_p_jo` |
 
-**Auto-swing (bits 6–7):**
+**Vertical swing (bits 6–7)** — from `as_p_on/as_p_of`:
 
 | Value  | Meaning            |
 | ------ | ------------------ |
@@ -638,24 +602,26 @@ CRC-16/CCITT (init `0xFFFF`, poly `0x1021`), covers all bytes before the CRC, ap
 
 #### Byte 3 — Fan speed + vertical position
 
-**Fan speed (low nibble, bits 0–3):**
+**Fan speed (low nibble, bits 0–3)** — from `af_p_*` arrays:
 
-| Value  | Speed   |
-| ------ | ------- |
-| `0x0F` | Auto    |
-| `0x08` | Speed 1 |
-| `0x09` | Speed 2 |
-| `0x0A` | Speed 3 |
-| `0x0E` | Speed 4 |
+| Value  | Speed   | Source    |
+| ------ | ------- | --------- |
+| `0x0F` | Auto    | `af_p_00` |
+| `0x08` | Speed 1 | `af_p_01` |
+| `0x09` | Speed 2 | `af_p_02` |
+| `0x0A` | Speed 3 | `af_p_03` |
+| `0x0E` | Speed 4 | `af_p_04` |
 
-**Vertical position (high nibble, bits 4–7) — only when swing is OFF:**
+**Vertical position (high nibble, bits 4–7)** — from `lv_p_*` arrays, only written when swing is OFF:
 
-| Value  | Position   |
-| ------ | ---------- |
-| `0x80` | Position 1 |
-| `0x90` | Position 2 |
-| `0xA0` | Position 3 |
-| `0xB0` | Position 4 |
+| Value  | Position   | Source    |
+| ------ | ---------- | --------- |
+| `0x80` | Position 1 | `lv_p_01` |
+| `0x90` | Position 2 | `lv_p_02` |
+| `0xA0` | Position 3 | `lv_p_03` |
+| `0xB0` | Position 4 | `lv_p_04` |
+
+> When swing is ON, `lv_p_01` (0x80) is still ORed in but has no effect since `as_p_on` already sets bits 6–7.
 
 #### Byte 4 — Temperature
 
@@ -665,23 +631,29 @@ byte = int(temp / 0.5) + 128
 
 Examples: 20°C → `0xA8`, 22°C → `0xAC`, 25°C → `0xB2`
 
-Range: 16.0°C – 31.0°C in 0.5° steps.
+Range: 16.0°C – 31.0°C in 0.5° steps. Fan mode always forces 25°C regardless of input.
 
 #### Byte 9 — Preset temp auto (command)
+
+From `PRESET_TEMP_AUTO_ON_COMMAND / PRESET_TEMP_AUTO_OFF_COMMAND`:
 
 | Value  | Meaning             |
 | ------ | ------------------- |
 | `0x01` | Preset temp auto ON |
 | `0x00` | OFF                 |
 
-#### Byte 10 — Vacant property / self-clean
+#### Byte 10 — Vacant property / self-clean reset
 
-| Bit    | Meaning            |
-| ------ | ------------------ |
-| `0x01` | Vacant property ON |
-| `0x04` | Self-clean reset   |
+From `COMMAND_VACANT_PROPERTY_ON` and `COMMAND_SELF_CLEAN_RESET_ON`:
+
+| Value  | Meaning                          |
+| ------ | -------------------------------- |
+| `0x01` | Vacant property ON (model-gated) |
+| `0x04` | Self-clean reset (model-gated)   |
 
 #### Byte 11 — Horizontal position
+
+From `lh_p_*` arrays:
 
 | Value  | Position   |
 | ------ | ---------- |
@@ -695,21 +667,21 @@ Range: 16.0°C – 31.0°C in 0.5° steps.
 
 #### Byte 12 — Horizontal swing + entrust + self-clean op
 
-**Horizontal swing (bits 0–1):**
+**Horizontal swing (bits 0–1)** — from `av_p_on/av_p_of`:
 
 | Value  | Meaning              |
 | ------ | -------------------- |
 | `0x03` | Horizontal swing ON  |
 | `0x02` | Horizontal swing OFF |
 
-**Entrust (bits 2–3):**
+**Entrust (bits 2–3)** — from `en_p_on/en_p_of`:
 
 | Value  | Meaning |
 | ------ | ------- |
 | `0x08` | OFF     |
 | `0x0C` | ON      |
 
-**Self-clean operation (bits 4–7):**
+**Self-clean operation (bits 4–7)** — from `COMMAND_OPERATION_MODE2_ON/OFF`:
 
 | Value  | Meaning |
 | ------ | ------- |
@@ -720,115 +692,153 @@ Range: 16.0°C – 31.0°C in 0.5° steps.
 
 ### Receive half — byte map (18 bytes)
 
+Initialised from `receive_init = {0,0,0,0,0,255,0,0,0,0,0,0,0,0,0,0,0,0}` — byte 5 is always `0xFF`.
+
+> **Important:** the receive half uses **different encodings** from the command half for operation, mode, fan speed, and positions. Do not mix them up when decoding.
+
+#### Byte 0 — Model type
+
+Same values as command half byte 0. The model type is ORed into byte 0 of the receive half by `receiveToByte` using the same `STATUS_MODEL_NO_TYPE_*` constants.
+
 #### Byte 2 — Operation + mode + vertical swing
 
-**Operation (bit 0):**
+**Operation (bit 0)** — from `op_n_on/op_n_of`:
 
 | Value  | Meaning |
 | ------ | ------- |
 | `0x01` | ON      |
 | `0x00` | OFF     |
 
-**Mode (bits 2–4):**
+**Mode (bits 2–4)** — from `om_n_*` arrays. **Different encoding from command half:**
 
-| Value  | Mode     |
-| ------ | -------- |
-| `0x00` | Auto     |
-| `0x08` | Cool     |
-| `0x10` | Heat     |
-| `0x0C` | Fan only |
-| `0x04` | Dry      |
+| Value  | Mode     | Source    |
+| ------ | -------- | --------- |
+| `0x00` | Auto     | `om_n_au` |
+| `0x08` | Cool     | `om_n_re` |
+| `0x10` | Heat     | `om_n_dn` |
+| `0x0C` | Fan only | `om_n_so` |
+| `0x04` | Dry      | `om_n_jo` |
 
-**Vertical swing (bit 6):**
+**Vertical swing (bit 6)** — from `as_n_on/as_n_of`:
 
 | Value  | Meaning   |
 | ------ | --------- |
 | `0x40` | Swing ON  |
 | `0x00` | Swing OFF |
 
-#### Byte 3 — Fan speed + vertical position (receive)
+#### Byte 3 — Fan speed + vertical position
 
-**Fan speed (low nibble, bits 0–3) — different encoding from command half:**
+**Fan speed (low nibble, bits 0–3)** — from `af_n_*` arrays. **Different encoding from command half:**
 
-| Value  | Speed   |
-| ------ | ------- |
-| `0x07` | Auto    |
-| `0x00` | Speed 1 |
-| `0x01` | Speed 2 |
-| `0x02` | Speed 3 |
-| `0x06` | Speed 4 |
+| Value  | Speed   | Source    |
+| ------ | ------- | --------- |
+| `0x07` | Auto    | `af_n_00` |
+| `0x00` | Speed 1 | `af_n_01` |
+| `0x01` | Speed 2 | `af_n_02` |
+| `0x02` | Speed 3 | `af_n_03` |
+| `0x06` | Speed 4 | `af_n_04` |
 
-**Vertical position (high nibble) — when swing OFF:**
+**Vertical position (high nibble, bits 4–7)** — from `lv_n_*` arrays, when swing OFF:
 
-| Value  | Position   |
-| ------ | ---------- |
-| `0x00` | Position 1 |
-| `0x10` | Position 2 |
-| `0x20` | Position 3 |
-| `0x30` | Position 4 |
+| Value  | Position   | Source    |
+| ------ | ---------- | --------- |
+| `0x00` | Position 1 | `lv_n_01` |
+| `0x10` | Position 2 | `lv_n_02` |
+| `0x20` | Position 3 | `lv_n_03` |
+| `0x30` | Position 4 | `lv_n_04` |
 
-#### Byte 4 — Temperature (receive)
+#### Byte 4 — Temperature
 
 ```
 byte = int(temp / 0.5)
 ```
 
-Examples: 20°C → `0x28`, 22°C → `0x2C`
+Examples: 20°C → `0x28`, 22°C → `0x2C`. Fan mode always forces 25°C.
 
 #### Byte 7 — Preset temp auto (status)
+
+From `PRESET_TEMP_AUTO_ON_STATUS`:
 
 | Value  | Meaning             |
 | ------ | ------------------- |
 | `0x80` | Preset temp auto ON |
+| `0x00` | OFF                 |
 
-#### Byte 11 — Horizontal position (receive)
+#### Byte 10 — Vacant property (status)
 
-`0x00`–`0x06` = positions 1–7
+From `STATUS_VACANT_PROPERTY_ON/OFF` (model-gated):
 
-#### Byte 11 — Horizontal position (receive)
+| Value  | Meaning            |
+| ------ | ------------------ |
+| `0x01` | Vacant property ON |
+| `0x00` | OFF                |
 
-`0x00`–`0x06` = positions 1–7
+#### Byte 11 — Horizontal position
 
-#### Byte 12 — Horizontal swing + entrust (receive)
+From `lh_n_*` arrays. **0-indexed** — different from command half:
+
+| Value  | Position   | Source    |
+| ------ | ---------- | --------- |
+| `0x00` | Position 1 | `lh_n_01` |
+| `0x01` | Position 2 | `lh_n_02` |
+| `0x02` | Position 3 | `lh_n_03` |
+| `0x03` | Position 4 | `lh_n_04` |
+| `0x04` | Position 5 | `lh_n_05` |
+| `0x05` | Position 6 | `lh_n_06` |
+| `0x06` | Position 7 | `lh_n_07` |
+
+#### Byte 12 — Horizontal swing + entrust
+
+**Horizontal swing (bit 0)** — from `av_n_on/av_n_of`:
 
 | Value  | Meaning              |
 | ------ | -------------------- |
 | `0x01` | Horizontal swing ON  |
 | `0x00` | Horizontal swing OFF |
-| `0x04` | Entrust ON           |
-| `0x00` | Entrust OFF          |
 
-> Note: swing and entrust occupy different bits and can be combined.
+**Entrust (bit 2)** — from `en_n_on/en_n_of`:
 
-#### Byte 15 — Operation mode 2
+| Value  | Meaning     |
+| ------ | ----------- |
+| `0x04` | Entrust ON  |
+| `0x00` | Entrust OFF |
+
+> Swing and entrust occupy different bits and can be combined.
+
+#### Byte 15 — Self-clean operation status
+
+From `STATUS_OPERATION_MODE2_ON/OFF`:
 
 | Value  | Meaning                 |
 | ------ | ----------------------- |
 | `0x01` | ON (self-clean running) |
+| `0x00` | OFF                     |
 
 ---
 
 ### Encoder notes
 
-**Fan mode (mode 3) temperature** — when `operationMode == 3` (fan only), the encoder ignores the actual preset temp and forces byte 4 to `25.0°C` in both command and receive halves.
+**Fan mode temperature** — when `operationMode == 3` (fan only), the encoder ignores the preset temp and forces byte 4 to `25.0°C` in both halves.
 
-**Horizontal swing is model-gated** — `windDirectionLR` is only encoded if `enabledWindDirectionLR()` is true for the model. If not supported, the encoder writes position 1 with swing off regardless of input.
+**Horizontal swing is model-gated** — `windDirectionLR` is only encoded if `enabledWindDirectionLR()` is true. Otherwise position 1 with swing off is always written.
 
-**Entrust is model-gated** — only encoded if `enableEntrust()` is true. Otherwise entrust OFF is always written.
+**Entrust is model-gated** — only encoded if `enableEntrust()` is true.
 
-**Vacant property is model-gated** — byte 10 bit 0 only written if `enableVacantProperty()` is true.
+**Vacant property is model-gated** — only encoded if `enableVacantProperty()` is true.
 
-**Self-clean is model-gated** — byte 10 bit 2 (reset) and byte 12 bits 4–7 (operation) only written if `enableSelfCleanOperation()` is true.
+**Self-clean is model-gated** — only encoded if `enableSelfCleanOperation()` is true.
+
+**`zeros` array mutation** — the Java source reuses the shared `zeros` array to set temp: `zeros[4] = int(temp/0.5) + 128`. This is a side-effect mutation of a shared static array. In practice it works because temp is always set before the array is passed to `toBytes()`, but it is technically a bug in the original code.
 
 ### Variable-length trailer (home leave mode)
 
-For models that support home leave mode (`enableHomeLeaveMode()`), the command half trailer is not the fixed 5 bytes `[0x01, 0xFF, 0xFF, 0xFF, 0xFF]`. Instead it carries home leave mode settings as a sequence of `(op_code, sub_code, value)` tuples:
+For models that support home leave mode (`enableHomeLeaveMode()`), the command half trailer replaces the fixed 5 bytes with:
 
 ```
 [count, op1, sub1, val1, op2, sub2, val2, ...]
 ```
 
-Where `count` = number of tuples / 4, and `op_code` is always `0xF8` (248). Sub-codes:
+Where `count = list.size() / 4` and `op_code` is always `0xF8` (248). Sub-codes:
 
 | Sub-code | Meaning                         |
 | -------- | ------------------------------- |
@@ -839,17 +849,15 @@ Where `count` = number of tuples / 4, and `op_code` is always `0xF8` (248). Sub-
 | `31`     | Fan speed for cooling (encoded) |
 | `32`     | Fan speed for heating (encoded) |
 
-Fan speed encoding for home leave mode: `0`=auto, `3`=speed1, `5`=speed2, `7`=speed3, `14`=speed4.
+Fan speed encoding: `0`=auto, `3`=speed1, `5`=speed2, `7`=speed3, `14`=speed4.
 
-When requesting home leave mode status (not setting it), `op_code = 0xF8` and `sub_code = 0xFF` for all 6 tuples with value `0`.
+When requesting home leave mode status (not setting it), all 6 tuples use `sub_code = 0xFF` and `value = 0`.
 
-The receive half always uses the fixed `[0x01, 0xFF, 0xFF, 0xFF, 0xFF]` trailer regardless of model.
+The receive half always uses the fixed `[0x01, 0xFF, 0xFF, 0xFF, 0xFF]` trailer.
 
 ---
 
 ## Model Capability Matrix
-
-Features available depend on the model type byte (byte 0 of the command half). Fields gated by capability should be omitted or ignored if the model does not support them.
 
 | Feature                         | Separate 2021 (0x00) | Global 2022 (0x01) | High-end Japanese 2023 (0x02) | ZT 2025 (0x03) | FDT 2023 (0x40) |
 | ------------------------------- | -------------------- | ------------------ | ----------------------------- | -------------- | --------------- |
@@ -875,32 +883,30 @@ Features available depend on the model type byte (byte 0 of the command half). F
 
 ## Indoor/Outdoor Temperature Encoding
 
-`indoorTemp` and `outdoorTemp` in the `getAirconStat` response are **not** raw degree values. They are byte indices into fixed lookup tables defined in the app resources. The device returns a raw byte; the app uses it as an array index to look up the actual °C value.
+`indoorTemp` and `outdoorTemp` are byte indices into fixed lookup tables in `res/values/arrays.xml`. The device returns a raw byte index; look up °C from the arrays.
 
-### Indoor temp table (256 entries, index 0–255)
+### Indoor temp table (256 entries)
 
-The table covers approximately **−30.0°C to +52.0°C** with non-uniform steps (coarser at extremes, ~0.2–0.5° steps in the normal range). Index 0–15 all map to −30.0°C (clamped). Selected values:
-
-| Index | °C    | Index | °C   | Index | °C   |
-| ----- | ----- | ----- | ---- | ----- | ---- |
-| 0–15  | −30.0 | 100   | 9.7  | 170   | 25.5 |
-| 69    | 0.0   | 120   | 15.0 | 180   | 28.0 |
-| 80    | 3.0   | 130   | 18.0 | 190   | 31.0 |
-| 90    | 6.0   | 140   | 20.5 | 200   | 33.5 |
-| 95    | 8.0   | 150   | 22.5 | 215   | 38.0 |
-
-### Outdoor temp table (256 entries, index 0–255)
-
-Covers approximately **−50.0°C to +43.0°C**. Index 0–4 clamp to −50.0°C. Selected values:
+Covers **−30.0°C to +52.0°C**. Index 0–15 clamp to −30.0°C. Full table is in `INDOOR_TEMP` in `mhi_codec.py`. Selected values:
 
 | Index | °C    | Index | °C   | Index | °C   |
 | ----- | ----- | ----- | ---- | ----- | ---- |
-| 0–4   | −50.0 | 90    | 0.0  | 160   | 18.0 |
-| 35    | −20.0 | 100   | 2.5  | 180   | 24.0 |
-| 60    | −8.0  | 120   | 7.0  | 200   | 29.0 |
-| 75    | −3.0  | 140   | 12.0 | 220   | 34.0 |
+| 0–15  | −30.0 | 100   | 9.5  | 160   | 25.2 |
+| 69    | 0.0   | 120   | 15.0 | 170   | 27.7 |
+| 80    | 3.5   | 130   | 17.7 | 180   | 30.2 |
+| 90    | 6.6   | 140   | 20.2 | 190   | 33.0 |
+| 95    | 8.0   | 150   | 22.7 | 255   | 52.0 |
 
-> The full lookup tables are embedded in the app as string arrays `indoor_temp` and `outdoor_temp` in `res/values/arrays.xml`. If you need exact values, use those arrays directly rather than the samples above.
+### Outdoor temp table (256 entries)
+
+Covers **−50.0°C to +43.0°C**. Index 0–4 clamp to −50.0°C. Full table is in `OUTDOOR_TEMP` in `mhi_codec.py`. Selected values:
+
+| Index | °C    | Index | °C   | Index | °C   |
+| ----- | ----- | ----- | ---- | ----- | ---- |
+| 0–4   | −50.0 | 90    | 0.0  | 160   | 17.5 |
+| 35    | −20.0 | 100   | 2.7  | 180   | 22.2 |
+| 60    | −9.3  | 120   | 7.7  | 220   | 32.5 |
+| 75    | −4.3  | 140   | 12.7 | 255   | 43.0 |
 
 ---
 
@@ -922,12 +928,11 @@ Covers approximately **−50.0°C to +43.0°C**. Index 0–4 clamp to −50.0°C
 
 ## Notes
 
-- The app supports two modes: **Wi-Fi direct** (local HTTPS/HTTP to device IP) and **cloud** (via `spa.smartmair.com`). The local Wi-Fi commands are documented fully above. Cloud commands are listed for reference only — cloud auth is not documented here.
-- The `operatorId` must be registered with the device via `updateAccountInfo` before other commands will work.
+- The `operatorId` must be registered via `updateAccountInfo` before any other command will work.
 - The app polls `getAirconStat` after `setAirconStat` for up to 30 seconds to confirm the AC accepted the new state.
-- `indoorTemp` and `outdoorTemp` are **not** JSON fields in the local Wi-Fi response. They are embedded in the `airconStat` blob as receive half extension tuples (codes `0x80/0x20` and `0x80/0x10`). Values are lookup table indices — use the `indoor_temp[]` and `outdoor_temp[]` arrays from the app resources to convert to °C.
-- `highTemp` and `lowTemp` in the JSON response are hex-encoded strings (e.g. `"AB"`), not integers. Parse with `int(v, 16)`.
-- `numOfAccount` in the `getAirconStat` response tracks how many operatorIds are currently registered.
-- `result: 1` on any local command means the operatorId is not registered — call `updateAccountInfo` first.
-- There is no known way to list registered operatorIds — `remoteList` always returns empty strings. Store your operatorId carefully.
-- `coolingOnly` visible in the app UI is stored locally in the app database only — it is not sent to the AC and has no wire representation.
+- `indoorTemp` and `outdoorTemp` are embedded in the `airconStat` blob receive half extension tuples (codes `0x80/0x20` and `0x80/0x10`), not JSON fields.
+- `highTemp` and `lowTemp` in the JSON response are hex-encoded strings (e.g. `"AB"`). Parse with `int(v, 16)`.
+- `result: 1` on any local command means the operatorId is not registered.
+- There is no way to list registered operatorIds — `remoteList` always returns empty strings.
+- `coolingOnly` in the app UI is stored locally only — it has no wire representation.
+- The command half and receive half use **different encodings** for mode, fan speed, and positions. Always decode from the receive half (bytes 25–42), not the command half.
