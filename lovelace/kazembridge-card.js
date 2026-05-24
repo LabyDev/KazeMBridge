@@ -37,15 +37,16 @@ const V_ANGLES = [12, 32, 55, 75];
 // User positions: 0=Normal(1) 1=Both Left(2) 2=Left+Center(3) 3=Both Center(4)
 //                 4=Center+Right(5) 5=Both Right(6) 6=Wide Spread(7) 7=Converge(?) swing=0
 // Codec wind_lr 1-7, swing=0.
+// Values must match the select entity option strings defined in const.py H_SWING_OPTIONS.
 const H_POSITIONS = [
-  { value: '1', label: 'Normal',       desc: 'Both forward' },
-  { value: '2', label: 'Both Left',    desc: 'Both sides left' },
-  { value: '3', label: 'Left + Mid',   desc: 'Left stays left, right goes center' },
-  { value: '4', label: 'Both Center',  desc: 'Both sides center' },
-  { value: '5', label: 'Mid + Right',  desc: 'Left goes center, right goes right' },
-  { value: '6', label: 'Both Right',   desc: 'Both sides right' },
-  { value: '7', label: 'Wide',         desc: 'Left aims left, right aims right' },
-  { value: 'swing', label: 'Swing',    desc: 'Auto swing' },
+  { value: 'normal',       label: 'Normal',      desc: 'Both forward',                      louver: [0,    0   ] },
+  { value: 'both_left',    label: 'Both Left',   desc: 'Both sides left',                   louver: [-45, -45 ] },
+  { value: 'left_center',  label: 'Left + Mid',  desc: 'Left stays left, right goes center',louver: [-45,  0  ] },
+  { value: 'both_center',  label: 'Both Center', desc: 'Both sides center',                 louver: [0,    0  ] },
+  { value: 'center_right', label: 'Mid + Right', desc: 'Left goes center, right goes right',louver: [0,   45  ] },
+  { value: 'both_right',   label: 'Both Right',  desc: 'Both sides right',                  louver: [45,  45  ] },
+  { value: 'wide',         label: 'Wide',        desc: 'Left aims left, right aims right',  louver: [-60,  60 ] },
+  { value: 'swing',        label: 'Swing',       desc: 'Auto swing',                        louver: null },
 ];
 
 // Vertical positions (codec swing_mode values)
@@ -163,13 +164,13 @@ class KazemBridgeCard extends HTMLElement {
   }
 
   _setHSwing(value) {
-    // Horizontal swing is exposed as a custom attribute; use a script-call workaround
-    // via set_swing_mode only if integrated — otherwise fire as custom event or direct HA service.
-    // For now, expose as a UI-only label until climate entity supports h-swing natively.
-    // This fires the HA service for horizontal swing as custom preset if supported.
-    this._hass.callService('climate', 'set_swing_mode', {
-      entity_id: this._config.entity,
-      swing_mode: mode,   // passed through to coordinator as-is; coordinator ignores if unknown
+    // Horizontal vane is a select entity — entity_id derived from the climate entity_id
+    // by replacing the domain prefix and appending _horizontal_vane.
+    const base = this._config.entity.replace(/^climate\./, '');
+    const selectId = `select.${base}_horizontal_vane`;
+    this._hass.callService('select', 'select_option', {
+      entity_id: selectId,
+      option: value,
     });
     this._pending = { field: 'h_swing', value, until: Date.now() + PENDING_MS };
     this._render();
@@ -267,22 +268,8 @@ class KazemBridgeCard extends HTMLElement {
    *   4=Both Center(0°,0°), 5=Center+Right(0°,+45°), 6=Both Right(+45°,+45°),
    *   7=Wide(-60°,+60°)
    */
-  _hLouverSvg(hValue, active = false) {
+  _hLouverSvg(angles, active = false) {
     const color = active ? '#4fc3f7' : '#666';
-    const LOUVER_ANGLES = {
-      '1':     [0,    0   ],
-      '2':     [-45,  -45 ],
-      '3':     [-45,  0   ],
-      '4':     [0,    0   ],
-      '5':     [0,    45  ],
-      '6':     [45,   45  ],
-      '7':     [-60,  60  ],
-      'swing': null,
-    };
-
-    // Override center position for pos 4 to look distinct from pos 1
-    // pos 1: both point forward (0), pos 4: also both center but we draw same — fine
-    const angles = LOUVER_ANGLES[hValue];
     const W = 36, H = 36, CX = W / 2, CY = H / 2;
     const LEN = 10; // half-length of each louver bar
 
@@ -365,7 +352,7 @@ class KazemBridgeCard extends HTMLElement {
     return H_POSITIONS.map(p => `
       <button class="vane-btn h-vane-btn ${p.value === currentH ? 'active' : ''}"
         data-hswing="${p.value}" title="${p.desc}">
-        ${this._hLouverSvg(p.value, p.value === currentH)}
+        ${this._hLouverSvg(p.louver, p.value === currentH)}
       </button>`).join('');
   }
 
@@ -391,11 +378,12 @@ class KazemBridgeCard extends HTMLElement {
     const outdoorT   = this._sensorValue(this._config.outdoor_sensor);
     const pending    = this._isPending();
 
-    // Horizontal swing is not yet exposed as a climate attribute — read from extra attrs.
+    // Read horizontal vane from the select entity (select.<base>_horizontal_vane).
     const hSwing = (() => {
-      const s = this._state();
       if (this._pending?.field === 'h_swing') return this._pending.value;
-      return s?.attributes?.wind_lr_mode || '1';
+      const base = this._config.entity.replace(/^climate\./, '');
+      const sel = this._hass?.states[`select.${base}_horizontal_vane`];
+      return sel?.state || 'normal';
     })();
 
     const css = `

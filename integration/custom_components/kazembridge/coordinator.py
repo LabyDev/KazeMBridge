@@ -39,4 +39,5 @@ class MhiCoordinator(DataUpdateCoordinator):
         data = decode(contents["airconStat"])
         data["led_stat"] = contents.get("ledStat")
         data["num_of_account"] = contents.get("numOfAccount")
+        data["auto_heating"] = contents.get("autoHeating")
         return data

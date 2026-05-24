@@ -107,10 +107,13 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
     def extra_state_attributes(self) -> dict:
         d = self.coordinator.data
         return {
+            "wind_lr": d.get("wind_lr"),
             "indoor_temp": d.get("indoor_temp"),
             "outdoor_temp": d.get("outdoor_temp"),
             "num_of_account": d.get("num_of_account"),
             "led_stat": d.get("led_stat"),
+            "auto_heating": d.get("auto_heating"),
+            "model_type": d.get("model_type"),
         }
 
     def _params(self) -> dict:
@@ -123,6 +126,7 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
             "wind_ud": d["wind_ud"],
             "wind_lr": d["wind_lr"],
             "entrust": 1 if d.get("entrust") else 0,
+            "model_type": d.get("model_type", 0),
         }
 
     async def _send(self, **overrides) -> None:

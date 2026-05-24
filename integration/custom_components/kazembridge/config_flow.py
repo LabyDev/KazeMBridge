@@ -11,11 +11,14 @@ always empty), so if the slot list is full the user must free one via the
 official SmartM-Air app.
 """
 
+import logging
 import uuid
 import voluptuous as vol
 from homeassistant import config_entries
 from .api import MhiApi, CannotConnect
 from .const import DOMAIN, DEFAULT_DEVICE_ID
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class KazemBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -57,6 +60,7 @@ class KazemBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except Exception:
+                _LOGGER.exception("Unexpected error during config flow")
                 errors["base"] = "unknown"
             finally:
                 await api.close()

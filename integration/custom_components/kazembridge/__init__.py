@@ -10,7 +10,7 @@ from .api import MhiApi
 from .const import DOMAIN
 from .coordinator import MhiCoordinator
 
-PLATFORMS = ["climate", "sensor"]
+PLATFORMS = ["climate", "sensor", "select"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

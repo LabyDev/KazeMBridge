@@ -353,6 +353,7 @@ Single `airconId` string in contents.
 | `logStat`          | Log status flag                                                                          |
 | `updatedBy`        | Who last updated state — `"local"` or `"aircon"`                                         |
 | `expires`          | Unix timestamp (seconds) when state expires                                              |
+| `autoHeating`      | `1` = frost protection on, `0` = off (also readable from airconStat blob byte 0 model)   |
 | `timezone`         | IANA timezone string                                                                     |
 | `firmType`         | Adapter firmware type string                                                             |
 | `wireless.firmVer` | Wi-Fi adapter firmware version                                                           |
@@ -939,15 +940,38 @@ Covers **−50.0°C to +43.0°C**. Index 0–4 clamp to −50.0°C. Full table i
 - `coolingOnly` in the app UI is stored locally only — it has no wire representation.
 - The command half and receive half use **different encodings** for mode, fan speed, and positions. Always decode from the receive half (bytes 25–42), not the command half.
 
+## KazeMBridge integration — what is implemented
+
+Summary of what the KazeMBridge HA integration reads and writes from the local API:
+
+| Field | Read | Write | Notes |
+| --- | --- | --- | --- |
+| `operation` | ✅ | ✅ | On/off via climate entity |
+| `operationMode` | ✅ | ✅ | Auto/cool/heat/fan/dry |
+| `temp_setpoint` | ✅ | ✅ | 16–31 °C in 0.5° steps |
+| `airFlow` (fan speed) | ✅ | ✅ | Auto or 1–4 |
+| `windDirectionUD` (vertical vane) | ✅ | ✅ | Swing + positions 1–4 via climate swing_mode |
+| `windDirectionLR` (horizontal vane) | ✅ | ✅ | Swing + positions 1–7 via select entity |
+| `entrust` (3D Auto) | ✅ | ✅ | Via climate preset_mode |
+| `model_type` | ✅ | ✅ | Read from blob byte 0, echoed back in every write |
+| `indoorTemp` | ✅ | — | Sensor entity + climate attribute |
+| `outdoorTemp` | ✅ | — | Sensor entity + climate attribute |
+| `ledStat` | ✅ | — | Climate extra attribute (settable via cloud setOptionSetting only) |
+| `autoHeating` | ✅ | — | Climate extra attribute (settable via cloud setOptionSetting only) |
+| `numOfAccount` | ✅ | — | Climate extra attribute |
+| Vacant property | — | — | Model-gated (Global 2022, ZT 2025) — not implemented |
+| Self-clean | — | — | Model-gated — not implemented |
+| Home leave mode | — | — | Model-gated, variable-length trailer — not implemented |
+
 ## Features not in the local binary protocol
 
 The following features appear in the SmartM-Air app UI but are **absent from the `airconStat` binary blob and all local API commands**. They are confirmed not present in `Aircon.smali` model fields or `AirconStatCoder` byte constants (verified against decompiled APK):
 
-| Feature       | Notes                                                                  |
-| ------------- | ---------------------------------------------------------------------- |
-| Hi mode       | Remote UI only — no local wire representation found                   |
-| Eco mode      | Remote UI only — no local wire representation found                   |
-| Silent mode   | Remote UI only — no local wire representation found                   |
-| Allergy mode  | Remote UI only — no local wire representation found                   |
-| Night setback | Likely cloud/schedule feature — no local command exists                |
-| Timers        | App-side scheduling only — the AC has no timer command in local API   |
+| Feature       | Notes                                                                |
+| ------------- | -------------------------------------------------------------------- |
+| Hi mode       | Remote UI only — no local wire representation found                 |
+| Eco mode      | Remote UI only — no local wire representation found                 |
+| Silent mode   | Remote UI only — no local wire representation found                 |
+| Allergy mode  | Remote UI only — no local wire representation found                 |
+| Night setback | Likely cloud/schedule feature — no local command exists              |
+| Timers        | App-side scheduling only — the AC has no timer command in local API |

@@ -4,9 +4,14 @@ Home Assistant custom integration for **Mitsubishi Heavy Industries ACs** with t
 
 ## What it exposes
 
-- **Climate entity** — on/off, modes (auto / cool / heat / fan / dry), temperature setpoint (16–31 °C in 0.5° steps), fan speed (auto / 1–4), vertical swing (swing / positions 1–4), horizontal vane (7 positions + swing), 3D Auto preset (entrust)
-- **Indoor temperature sensor**
-- **Outdoor temperature sensor**
+| Entity | Type | Description |
+|---|---|---|
+| `climate.<name>` | Climate | On/off, modes (auto/cool/heat/fan/dry), temp 16–31 °C (0.5° steps), fan auto/1–4, vertical swing (swing + 4 positions), 3D Auto preset |
+| `select.<name>_horizontal_vane` | Select | Horizontal vane position: normal / both\_left / left\_center / both\_center / center\_right / both\_right / wide / swing |
+| `sensor.<name>_indoor_temperature` | Sensor | Indoor temperature (°C) — parsed from airconStat blob |
+| `sensor.<name>_outdoor_temperature` | Sensor | Outdoor temperature (°C) — parsed from airconStat blob |
+
+Extra state attributes on the climate entity: `wind_lr` (integer), `indoor_temp`, `outdoor_temp`, `led_stat`, `auto_heating`, `num_of_account`, `model_type`.
 
 ## Installation
 
@@ -48,13 +53,24 @@ An example dashboard is at [`lovelace/dashboard.yaml`](lovelace/dashboard.yaml).
 ```
 integration/
   custom_components/
-    kazembridge/        Install this into HA config/custom_components/
+    kazembridge/
+      __init__.py       Entry point — sets up API, coordinator, platforms
+      manifest.json     Integration metadata
+      const.py          Domain constants and mode/position mappings
+      config_flow.py    UI setup flow (enter IP, auto-register)
+      api.py            aiohttp HTTPS client for the device API
+      coordinator.py    DataUpdateCoordinator — polls every 30 s
+      mhi_codec.py      Binary blob encoder/decoder
+      climate.py        ClimateEntity
+      sensor.py         Indoor + outdoor temperature SensorEntity
+      select.py         Horizontal vane SelectEntity
 lovelace/
-  kazembridge-card.js  Custom Lovelace card
-  dashboard.yaml       Example dashboard
-tools/                 Standalone CLI tools
+  kazembridge-card.js   Custom Lovelace card
+  dashboard.yaml        Example dashboard
+tools/
+  mhi_codec.py          Standalone CLI codec tool
 research/
-  research.md          Full reverse-engineered API documentation
+  research.md           Full reverse-engineered API documentation
 ```
 
 ## CLI codec tool

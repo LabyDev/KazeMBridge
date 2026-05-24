@@ -66,6 +66,7 @@ def decode(b64: str) -> dict:
     Decode an airconStat base64 blob into a dict with clean Python types.
 
     Returns:
+        model_type   : int   (0x00=Separate2021 0x01=Global2022 0x02=HighEndJP2023 0x03=ZT2025 0x40=FDT2023)
         operation    : bool  (True=ON)
         mode         : int   (0=auto 1=cool 2=heat 3=fan 4=dry)
         temp_setpoint: float (°C)
@@ -102,6 +103,7 @@ def decode(b64: str) -> dict:
     wind_lr = 0 if horiz_swing else (r[11] + 1)
 
     return {
+        "model_type": r[0],
         "operation": operation,
         "mode": mode,
         "temp_setpoint": r[4] * 0.5,
@@ -115,17 +117,21 @@ def decode(b64: str) -> dict:
 
 
 def encode(operation: int, mode: int, temp: float,
-           fan: int, wind_ud: int, wind_lr: int = 1, entrust: int = 0) -> str:
+           fan: int, wind_ud: int, wind_lr: int = 1, entrust: int = 0,
+           model_type: int = 0) -> str:
     """
     Encode AC state into an airconStat base64 blob.
 
-    operation : 1=ON  0=OFF
-    mode      : 0=auto 1=cool 2=heat 3=fan 4=dry
-    temp      : setpoint °C (16.0-31.0 in 0.5 steps; ignored in fan mode)
-    fan       : 0=auto 1-4=speeds
-    wind_ud   : 0=swing 1-4=vertical positions (1=near-horizontal, 4=steep down)
-    wind_lr   : 0=swing 1-7=horizontal positions
-    entrust   : 1=3D Auto (entrust) ON, 0=OFF
+    operation  : 1=ON  0=OFF
+    mode       : 0=auto 1=cool 2=heat 3=fan 4=dry
+    temp       : setpoint °C (16.0-31.0 in 0.5 steps; ignored in fan mode)
+    fan        : 0=auto 1-4=speeds
+    wind_ud    : 0=swing 1-4=vertical positions (1=near-horizontal, 4=steep down)
+    wind_lr    : 0=swing 1-7=horizontal positions
+    entrust    : 1=3D Auto (entrust) ON, 0=OFF
+    model_type : byte 0 model identifier — echo back the value from decode() to
+                 preserve correct behaviour on non-default unit types
+                 (0x00=Separate2021 0x01=Global2022 0x02=HighEndJP2023 0x03=ZT2025 0x40=FDT2023)
     """
     MODES_C = {0: 0x20, 1: 0x28, 2: 0x30, 3: 0x2C, 4: 0x24}
     MODES_R = {0: 0x00, 1: 0x08, 2: 0x10, 3: 0x0C, 4: 0x04}
@@ -134,7 +140,7 @@ def encode(operation: int, mode: int, temp: float,
 
     tval = 25.0 if mode == 3 else temp
 
-    c = bytearray(18); c[5] = 0xFF
+    c = bytearray(18); c[5] = 0xFF; c[0] = model_type
     c[2] |= 0x03 if operation else 0x02
     c[2] |= MODES_C[mode]
     c[3] |= FAN_C[fan]
@@ -154,7 +160,7 @@ def encode(operation: int, mode: int, temp: float,
     c[12] |= 0x0C if entrust else 0x08
     c[4] = int(tval / 0.5) + 128
 
-    r = bytearray(18); r[5] = 0xFF
+    r = bytearray(18); r[5] = 0xFF; r[0] = model_type
     r[2] |= 0x01 if operation else 0x00
     r[2] |= MODES_R[mode]
     r[3] |= FAN_R[fan]
@@ -166,6 +172,7 @@ def encode(operation: int, mode: int, temp: float,
         r[12] |= 0x01
     else:
         r[11] |= (wind_lr - 1)
+    r[12] |= 0x04 if entrust else 0x00
     r[4] = int(tval / 0.5)
 
     return base64.b64encode(_finalize(c) + _finalize(r)).decode()
