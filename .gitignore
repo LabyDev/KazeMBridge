@@ -1,0 +1,5 @@
+research/captures/
+*.mitm
+*.pcap
+__pycache__/
+.venv/
