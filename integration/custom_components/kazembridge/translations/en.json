@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "KazeMBridge — MHI WF-RAC",
+        "description": "Enter the local IP address of your MHI WF-RAC Wi-Fi adapter.",
+        "data": {
+          "host": "IP Address"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the device. Check the IP address and that the adapter is on your local network.",
+      "operator_list_full": "The AC operator list is full (max ~4 accounts). Remove an account via the SmartM-Air app and try again.",
+      "register_failed": "Failed to register with the AC.",
+      "unknown": "Unexpected error. Check the logs."
+    },
+    "abort": {
+      "already_configured": "This AC is already configured."
+    }
+  }
+}

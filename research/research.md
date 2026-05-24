@@ -657,15 +657,15 @@ From `COMMAND_VACANT_PROPERTY_ON` and `COMMAND_SELF_CLEAN_RESET_ON`:
 
 From `lh_p_*` arrays:
 
-| Value  | Position   |
-| ------ | ---------- |
-| `0x10` | Position 1 |
-| `0x11` | Position 2 |
-| `0x12` | Position 3 |
-| `0x13` | Position 4 |
-| `0x14` | Position 5 |
-| `0x15` | Position 6 |
-| `0x16` | Position 7 |
+| Value  | Position   | Description                       |
+| ------ | ---------- | --------------------------------- |
+| `0x10` | Position 1 | Normal — both louvers forward     |
+| `0x11` | Position 2 | Both left                         |
+| `0x12` | Position 3 | Left stays left, right goes center|
+| `0x13` | Position 4 | Both center                       |
+| `0x14` | Position 5 | Left goes center, right goes right|
+| `0x15` | Position 6 | Both right                        |
+| `0x16` | Position 7 | Wide spread — left left, right right|
 
 #### Byte 12 — Horizontal swing + entrust + self-clean op
 
@@ -777,7 +777,7 @@ From `STATUS_VACANT_PROPERTY_ON/OFF` (model-gated):
 
 #### Byte 11 — Horizontal position
 
-From `lh_n_*` arrays. **0-indexed** — different from command half:
+From `lh_n_*` arrays. **0-indexed** — different from command half. Same 7 positions as the command half; see command byte 11 for descriptions.
 
 | Value  | Position   | Source    |
 | ------ | ---------- | --------- |
@@ -931,10 +931,23 @@ Covers **−50.0°C to +43.0°C**. Index 0–4 clamp to −50.0°C. Full table i
 ## Notes
 
 - The `operatorId` must be registered via `updateAccountInfo` before any other command will work.
-- The app polls `getAirconStat` after `setAirconStat` for up to 30 seconds to confirm the AC accepted the new state.
+- The app polls `getAirconStat` after `setAirconStat` for up to 30 seconds to confirm the AC accepted the new state. In practice the AC takes approximately 5 seconds to apply and report back a state change.
 - `indoorTemp` and `outdoorTemp` are embedded in the `airconStat` blob receive half extension tuples (codes `0x80/0x20` and `0x80/0x10`), not JSON fields.
 - `highTemp` and `lowTemp` in the JSON response are hex-encoded strings (e.g. `"AB"`). Parse with `int(v, 16)`.
 - `result: 1` on any local command means the operatorId is not registered.
 - There is no way to list registered operatorIds — `remoteList` always returns empty strings.
 - `coolingOnly` in the app UI is stored locally only — it has no wire representation.
 - The command half and receive half use **different encodings** for mode, fan speed, and positions. Always decode from the receive half (bytes 25–42), not the command half.
+
+## Features not in the local binary protocol
+
+The following features appear in the SmartM-Air app UI but are **absent from the `airconStat` binary blob and all local API commands**. They are confirmed not present in `Aircon.smali` model fields or `AirconStatCoder` byte constants (verified against decompiled APK):
+
+| Feature       | Notes                                                                  |
+| ------------- | ---------------------------------------------------------------------- |
+| Hi mode       | Remote UI only — no local wire representation found                   |
+| Eco mode      | Remote UI only — no local wire representation found                   |
+| Silent mode   | Remote UI only — no local wire representation found                   |
+| Allergy mode  | Remote UI only — no local wire representation found                   |
+| Night setback | Likely cloud/schedule feature — no local command exists                |
+| Timers        | App-side scheduling only — the AC has no timer command in local API   |

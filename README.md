@@ -1,40 +1,76 @@
 # KazeMBridge
 
-Reverse-engineering the local HTTP API of two Mitsubishi Electric ACs running the **Smart M-Air** app, with the eventual goal of a Home Assistant custom integration.
+Home Assistant custom integration for **Mitsubishi Heavy Industries ACs** with the **WF-RAC-HTTPS** Wi-Fi adapter. Controls the AC entirely over local Wi-Fi — no cloud, no account required.
 
-## Approach
+## What it exposes
 
-The ACs communicate over the local network via their WiFi adapters (MAC-300IF/558IF series). We intercept that traffic using [mitmproxy](https://mitmproxy.org/) to map every endpoint the app calls.
+- **Climate entity** — on/off, modes (auto / cool / heat / fan / dry), temperature setpoint (16–31 °C in 0.5° steps), fan speed (auto / 1–4), vertical swing (swing / positions 1–4), horizontal vane (7 positions + swing), 3D Auto preset (entrust)
+- **Indoor temperature sensor**
+- **Outdoor temperature sensor**
 
-### Setup mitmproxy
+## Installation
 
-```bash
-pip install mitmproxy
-mitmproxy --listen-port 8080
+### Integration
+
+1. Copy `integration/custom_components/kazembridge/` into your HA `config/custom_components/` directory.
+2. Restart Home Assistant.
+3. Go to **Settings → Integrations → Add Integration** and search for **KazeMBridge**.
+4. Enter the local IP address of your AC's Wi-Fi adapter.
+
+The integration auto-generates a UUID operator ID and registers it with the AC on first setup.
+
+### Lovelace card (optional)
+
+A custom card with visual vane controls is included:
+
+1. Copy `lovelace/kazembridge-card.js` to your HA `config/www/` directory.
+2. In **Settings → Dashboards → Resources**, add `/local/kazembridge-card.js` (type: JavaScript module).
+3. Add a card to your dashboard:
+
+```yaml
+type: custom:kazembridge-card
+entity: climate.mhi_ac
+indoor_sensor: sensor.mhi_ac_indoor_temperature   # optional
+outdoor_sensor: sensor.mhi_ac_outdoor_temperature # optional
 ```
 
-On your phone, set the WiFi proxy to `<your-pc-ip>:8080`. Install the mitmproxy CA cert (visit `mitm.it` on the proxied device) to capture HTTPS too.
+The card shows mode buttons, temperature control, a live side-profile vane SVG, vertical and horizontal vane selectors with visual louver icons, fan speed, and a 3D Auto toggle. Clicking any control updates the UI immediately (optimistic state) with a loading indicator while the AC confirms (~5 seconds).
 
-Perform every action in Smart M-Air — power, mode, temperature, fan speed, swing — and watch the requests roll in.
+An example dashboard is at [`lovelace/dashboard.yaml`](lovelace/dashboard.yaml).
 
-### Try the AC directly
+## Requirements
 
-Before proxying, just probe the adapter's IP:
-
-```bash
-python tools/api_test.py --host 192.168.x.x --path /
-python tools/api_test.py --host 192.168.x.x --path /aircon/get_control_info
-```
-
-Some adapters have open endpoints that respond without any auth.
-
-## Findings
-
-See [research/endpoints.md](research/endpoints.md) for the running log of discovered endpoints.
+- MHI AC with a **WF-RAC-HTTPS** Wi-Fi adapter reachable on your local network
+- The adapter's local IP address (recommended: assign a static DHCP lease via your router)
 
 ## Repo structure
 
 ```
-tools/           CLI scripts for probing the AC
-research/        Endpoint log and raw captures (captures/ is gitignored)
+integration/
+  custom_components/
+    kazembridge/        Install this into HA config/custom_components/
+lovelace/
+  kazembridge-card.js  Custom Lovelace card
+  dashboard.yaml       Example dashboard
+tools/                 Standalone CLI tools
+research/
+  research.md          Full reverse-engineered API documentation
 ```
+
+## CLI codec tool
+
+`tools/mhi_codec.py` decodes and encodes `airconStat` blobs for debugging:
+
+```bash
+python tools/mhi_codec.py
+```
+
+## How it works
+
+The WF-RAC adapter exposes a local HTTPS API on port 51443. All AC state is packed into a binary blob (`airconStat`) encoded as base64. The integration decodes this blob to read state and re-encodes it to send commands. See [`research/research.md`](research/research.md) for the full API and encoding documentation.
+
+## Known limitations
+
+- **Hi / Eco / Silent / Allergy / Night setback / Timers** — these features appear in the SmartM-Air app UI but are not part of the local binary protocol. They are not controllable via this integration.
+- **Horizontal vane** — exposed as a card-only control for now; HA's climate entity does not have a native horizontal swing attribute.
+- The AC takes approximately 5 seconds to apply a command and confirm the new state.

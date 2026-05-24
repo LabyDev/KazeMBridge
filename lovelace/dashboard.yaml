@@ -1,0 +1,36 @@
+# KazeMBridge example Lovelace dashboard
+#
+# Replace entity IDs with the ones HA assigned to your AC.
+# To find them: Settings → Entities → search "mhi" or "kazembridge".
+#
+# To use this dashboard:
+#   1. Copy kazembridge-card.js to config/www/
+#   2. Add the resource in Settings → Dashboards → Resources:
+#        URL:  /local/kazembridge-card.js
+#        Type: JavaScript module
+#   3. Create a new dashboard and paste this YAML in raw edit mode.
+
+title: Air Conditioning
+views:
+  - title: AC Control
+    icon: mdi:air-conditioner
+    cards:
+      - type: custom:kazembridge-card
+        entity: climate.mhi_ac
+        indoor_sensor: sensor.mhi_ac_indoor_temperature
+        outdoor_sensor: sensor.mhi_ac_outdoor_temperature
+        # Override vane angles if your unit's physical positions differ.
+        # Values are degrees from horizontal — 0 = flat forward, 90 = straight down.
+        # vane_angles: [10, 30, 50, 70]
+
+      # Optional: expose raw attributes as individual entities for automations.
+      - type: entities
+        title: Details
+        entities:
+          - entity: climate.mhi_ac
+            name: Climate
+          - entity: sensor.mhi_ac_indoor_temperature
+            name: Indoor temperature
+          - entity: sensor.mhi_ac_outdoor_temperature
+            name: Outdoor temperature
+        show_header_toggle: false
