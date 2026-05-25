@@ -12,7 +12,7 @@
  */
 
 const MODES = {
-  off:      { label: 'Off',  icon: '⏻' },
+  off:      { label: 'Off',  icon: null },   // power btn uses inline SVG, not ⏻
   auto:     { label: 'Auto', icon: '♾' },
   cool:     { label: 'Cool', icon: '❄' },
   heat:     { label: 'Heat', icon: '🔥' },
@@ -28,6 +28,12 @@ const MODE_COLORS = {
   fan_only: '#80cbc4',
   dry:      '#fff176',
 };
+
+// Inline SVG power icon — replaces ⏻ which has poor mobile font support
+const POWER_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+  <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7A7 7 0 0 1 5 12c0-2.28 1.09-4.3 2.79-5.59L6.37 5A8.93 8.93 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z"
+    fill="currentColor"/>
+</svg>`;
 
 // Vertical vane: degrees from horizontal. 1=shallow, 4=steep down.
 const V_ANGLES = [12, 32, 55, 75];
@@ -66,6 +72,7 @@ class KazemBridgeCard extends HTMLElement {
     this._debounceTimer = null;
     this._pollInterval = null;
     this._entrustDebounce = null;
+    this._firstHassSet = true;
   }
 
   connectedCallback() {
@@ -92,10 +99,16 @@ class KazemBridgeCard extends HTMLElement {
       outdoor_sensor: config.outdoor_sensor || null,
     };
     this._render();
+    // poll immediately once hass is already available
+    if (this._hass) {
+      this._triggerPoll();
+    }
   }
 
   set hass(hass) {
+    const wasNull = !this._hass;
     this._hass = hass;
+
     if (this._pending) {
       const s = hass.states[this._config?.entity];
       if (s) {
@@ -108,6 +121,12 @@ class KazemBridgeCard extends HTMLElement {
         }
       }
     }
+
+    // fire a poll as soon as both hass and config are first available
+    if (wasNull && this._config) {
+      this._triggerPoll();
+    }
+
     this._render();
   }
 
@@ -213,30 +232,29 @@ class KazemBridgeCard extends HTMLElement {
 
   /**
    * Front view of the AC unit — shows horizontal airflow direction.
-   * hSwingValue: one of H_POSITIONS[n].value
+   * Front view arrows point downward (away from grille), arrowY at bottom edge of grille.
    */
   _frontViewSvg(hSwingValue) {
     const W = 200, BH = 40, BY = 14;
     const pos = H_POSITIONS.find(p => p.value === hSwingValue) || H_POSITIONS[0];
     const isSwing = pos.louver === null;
 
-    // Arrow helper: draws a dashed line + arrowhead from (ox,oy) at angle deg
-    // deg=0 means pointing right (out from front face = upward in this orientation)
-    // We rotate the whole group so 0deg = straight out from the front grille
+    // arrows point downward from the grille bottom edge.
+    // deg=0 → straight down, negative=left, positive=right.
     const arrow = (cx, cy, deg, opacity = 1) => {
       const len = 36;
       const r = deg * Math.PI / 180;
-      // In front-view: straight out = upward = negative Y, left = negative X
-      // deg=0 → straight ahead (up), negative = left, positive = right
+      // Downward: ey = cy + len*cos(r), ex = cx + len*sin(r)
       const ex = cx + len * Math.sin(r);
-      const ey = cy - len * Math.cos(r);  // subtract because SVG Y is inverted
+      const ey = cy + len * Math.cos(r);
       const mx = cx + (len - 6) * Math.sin(r);
-      const my = cy - (len - 6) * Math.cos(r);
-      const lx = mx - 7 * Math.cos(r - 0.4), ly = my - 7 * (-Math.sin(r - 0.4));
-      const rx = mx - 7 * Math.cos(r + 0.4), ry = my - 7 * (-Math.sin(r + 0.4));
+      const my = cy + (len - 6) * Math.cos(r);
+      // Arrowhead barbs: perpendicular to forward direction, pointing back toward shaft
+      const lx = mx - 7 * Math.cos(r + 0.4), ly = my + 7 * Math.sin(r + 0.4);
+      const rx = mx - 7 * Math.cos(r - 0.4), ry = my + 7 * Math.sin(r - 0.4);
       return `
         <g opacity="${opacity}">
-          <line x1="${cx}" y1="${cy}" x2="${(ex - 5 * Math.sin(r)).toFixed(1)}" y2="${(ey + 5 * Math.cos(r)).toFixed(1)}"
+          <line x1="${cx}" y1="${cy}" x2="${(ex - 5 * Math.sin(r)).toFixed(1)}" y2="${(ey - 5 * Math.cos(r)).toFixed(1)}"
             stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3"/>
           <path d="M${lx.toFixed(1)},${ly.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)} L${rx.toFixed(1)},${ry.toFixed(1)}"
             fill="#4fc3f7"/>
@@ -244,18 +262,17 @@ class KazemBridgeCard extends HTMLElement {
     };
 
     const cx1 = W / 2 - 28, cx2 = W / 2 + 28;
-    const arrowY = BY + BH + 6;
+    // arrowY at bottom edge of grille (not 6px below)
+    const arrowY = BY + BH;
 
     let arrowContent;
     if (isSwing) {
-      // Animate both arrows sweeping left↔right
+      // swing animation goes downward — arrows sweep left↔right below the grille
       const swingDegs = [-60, -30, 0, 30, 60, 30, 0, -30, -60];
-      const vals1 = swingDegs.map(d => d).join(';');
-      const vals2 = swingDegs.map(d => d).join(';');
       const kts = swingDegs.map((_, i) => (i / (swingDegs.length - 1)).toFixed(3)).join(';');
       arrowContent = `
         <g id="arr1" opacity="0.85">
-          <line x1="${cx1}" y1="${arrowY}" x2="${cx1}" y2="${arrowY - 30}"
+          <line x1="${cx1}" y1="${arrowY}" x2="${cx1}" y2="${arrowY + 30}"
             stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3">
             <animateTransform attributeName="transform" type="rotate"
               values="${swingDegs.map(d => `${d} ${cx1} ${arrowY}`).join(';')}"
@@ -264,7 +281,7 @@ class KazemBridgeCard extends HTMLElement {
           </line>
         </g>
         <g id="arr2" opacity="0.85">
-          <line x1="${cx2}" y1="${arrowY}" x2="${cx2}" y2="${arrowY - 30}"
+          <line x1="${cx2}" y1="${arrowY}" x2="${cx2}" y2="${arrowY + 30}"
             stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3">
             <animateTransform attributeName="transform" type="rotate"
               values="${swingDegs.map(d => `${-d} ${cx2} ${arrowY}`).join(';')}"
@@ -290,23 +307,25 @@ class KazemBridgeCard extends HTMLElement {
 
   /**
    * Side view of the AC unit — shows vertical vane angle.
-   * vSwingValue: 'swing' | '1' | '2' | '3' | '4'
+   * Side view — body on right, vane swings left-downward, vane swings left-downward.
    */
   _sideViewSvg(vSwingValue) {
     const isSwing = vSwingValue === 'swing';
-    // Body dimensions (side profile — narrower rect)
-    const BW = 60, BH = 30, BX = 10, BY = 18;
-    // Vane pivot at front-bottom of body
-    const VX = BX + BW, VY = BY + BH;
-    const VLEN = 50;
+    // body on right side
+    const BW = 60, BH = 30, BX = 130, BY = 18;
+    // VX = BX (front face = left edge of body), vane goes left+down
+    const VX = BX, VY = BY + BH;
+    // shorter vane
+    const VLEN = 34;
 
     const activeAngle = isSwing
       ? V_ANGLES[0]
       : (V_ANGLES[parseInt(vSwingValue, 10) - 1] ?? V_ANGLES[0]);
 
+    // vane endpoint flipped — goes left+down: x decreases, y increases
     const ep = deg => {
       const r = deg * Math.PI / 180;
-      return [VX + VLEN * Math.cos(r), VY + VLEN * Math.sin(r)];
+      return [VX - VLEN * Math.cos(r), VY + VLEN * Math.sin(r)];
     };
 
     const [vx2, vy2] = ep(activeAngle);
@@ -315,15 +334,16 @@ class KazemBridgeCard extends HTMLElement {
     const rotatePath = swingValues.map(a => `${a} ${VX},${VY}`).join(';');
     const keyTimes = swingValues.map((_, i) => (i / (swingValues.length - 1)).toFixed(3)).join(';');
 
+    // arrow SVG also goes left-downward
     const arrowSvg = (deg, opacity = 1) => {
       const r = deg * Math.PI / 180;
-      const x1 = VX + 12 * Math.cos(r), y1 = VY + 12 * Math.sin(r);
-      const x2 = VX + (VLEN + 18) * Math.cos(r), y2 = VY + (VLEN + 18) * Math.sin(r);
+      const x1 = VX - 12 * Math.cos(r), y1 = VY + 12 * Math.sin(r);
+      const x2 = VX - (VLEN + 18) * Math.cos(r), y2 = VY + (VLEN + 18) * Math.sin(r);
       const tip = [x2, y2];
-      const left = [x2 - 7 * Math.cos(r - 0.4), y2 - 7 * Math.sin(r - 0.4)];
-      const right = [x2 - 7 * Math.cos(r + 0.4), y2 - 7 * Math.sin(r + 0.4)];
+      const left = [x2 + 6 * Math.cos(r - 0.4), y2 - 6 * Math.sin(r - 0.4)];
+      const right = [x2 + 6 * Math.cos(r + 0.4), y2 - 6 * Math.sin(r + 0.4)];
       return `
-        <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${(x2 - 5 * Math.cos(r)).toFixed(1)}" y2="${(y2 - 5 * Math.sin(r)).toFixed(1)}"
+        <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${(x2 + 5 * Math.cos(r)).toFixed(1)}" y2="${(y2 - 5 * Math.sin(r)).toFixed(1)}"
           stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3" opacity="${opacity}"/>
         <path d="M${left[0].toFixed(1)},${left[1].toFixed(1)} L${tip[0].toFixed(1)},${tip[1].toFixed(1)} L${right[0].toFixed(1)},${right[1].toFixed(1)}"
           fill="#4fc3f7" opacity="${opacity}"/>`;
@@ -344,11 +364,12 @@ class KazemBridgeCard extends HTMLElement {
         ${arrowSvg(activeAngle, 0.75)}`;
 
     return `<svg viewBox="0 0 200 110" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
-      <!-- AC side profile body -->
+      <!-- AC side profile body (right side) -->
       <rect x="${BX}" y="${BY}" width="${BW}" height="${BH}" rx="5" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
-      <!-- Front face indicator line -->
-      <line x1="${BX + BW}" y1="${BY}" x2="${BX + BW}" y2="${BY + BH}" stroke="#4a4a5a" stroke-width="2"/>
-      <circle cx="${BX + 12}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
+      <!-- Front face indicator line (left edge of body) -->
+      <line x1="${BX}" y1="${BY}" x2="${BX}" y2="${BY + BH}" stroke="#4a4a5a" stroke-width="2"/>
+      <!-- LED on back-right of body -->
+      <circle cx="${BX + BW - 12}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
       <!-- Vane -->
       ${vaneContent}
     </svg>`;
@@ -357,11 +378,17 @@ class KazemBridgeCard extends HTMLElement {
   // ─── Buttons ──────────────────────────────────────────────────────────────
 
   _modeButtons(currentMode) {
-    return Object.entries(MODES).map(([mode, { label, icon }]) => `
-      <button class="mode-btn ${mode === currentMode ? 'active' : ''}" data-mode="${mode}" title="${label}">
-        <span class="mode-icon">${icon}</span>
-        <span class="mode-label">${label}</span>
-      </button>`).join('');
+    return Object.entries(MODES).map(([mode, { label, icon }]) => {
+      // power button (off mode) uses inline SVG; other modes use emoji
+      const iconHtml = mode === 'off'
+        ? POWER_SVG
+        : `<span class="mode-icon">${icon}</span>`;
+      return `
+        <button class="mode-btn ${mode === currentMode ? 'active' : ''}" data-mode="${mode}" title="${label}">
+          ${iconHtml}
+          <span class="mode-label">${label}</span>
+        </button>`;
+    }).join('');
   }
 
   _fanButtons(currentFan) {
@@ -377,16 +404,19 @@ class KazemBridgeCard extends HTMLElement {
       const isSwing = p.value === 'swing';
       const active = p.value === current;
       const icon = isSwing
+        // ↕ replaced with inline SVG showing two opposing vertical arrows
         ? `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
-            <text x="12" y="17" text-anchor="middle" font-size="14" fill="currentColor">↕</text>
+            <path d="M7 10l5-5 5 5H7zm10 4l-5 5-5-5h10z" fill="currentColor"/>
           </svg>`
         : (() => {
             const r = p.angle * Math.PI / 180;
+            // scaleX(-1) to mirror arrow left-downward after side view flip
             const x2 = 4 + 16 * Math.cos(r), y2 = 4 + 16 * Math.sin(r);
             const tx = x2, ty = y2;
             const lx = x2 - 6 * Math.cos(r - 0.4), ly = y2 - 6 * Math.sin(r - 0.4);
             const rx2 = x2 - 6 * Math.cos(r + 0.4), ry = y2 - 6 * Math.sin(r + 0.4);
-            return `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
+            return `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg"
+                style="transform:scaleX(-1)">
               <line x1="4" y1="4" x2="${(x2 - 4 * Math.cos(r)).toFixed(1)}" y2="${(y2 - 4 * Math.sin(r)).toFixed(1)}"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               <path d="M${lx.toFixed(1)},${ly.toFixed(1)} L${tx.toFixed(1)},${ty.toFixed(1)} L${rx2.toFixed(1)},${ry.toFixed(1)}"
@@ -414,22 +444,25 @@ class KazemBridgeCard extends HTMLElement {
     const LEN = 10;
 
     if (!angles) {
+      // ↔ replaced with inline SVG showing two opposing horizontal arrows
       return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-        <text x="${CX}" y="${CY + 5}" text-anchor="middle" font-size="16" fill="${color}">↔</text>
+        <path d="M4 18l5-4v3h5v2H9v3L4 18zm28 0l-5 4v-3h-5v-2h5v-3l5 4z" fill="${color}"/>
       </svg>`;
     }
 
+    // arrowhead at BOTTOM end (by/bx side) so arrow points forward/out of unit
     const louver = (cx, deg) => {
       const r = deg * Math.PI / 180;
       const dx = LEN * Math.sin(r), dy = LEN * Math.cos(r);
-      const tx = cx + dx, ty = CY - dy;
-      const bx = cx - dx, by = CY + dy;
-      const ax = tx - 5 * Math.sin(r - 0.35), ay = ty + 5 * Math.cos(r - 0.35);
-      const bax = tx - 5 * Math.sin(r + 0.35), bay = ty + 5 * Math.cos(r + 0.35);
+      const tx = cx + dx, ty = CY - dy;   // top end
+      const bx = cx - dx, by = CY + dy;   // bottom end (forward/out) — arrowhead here
+      // Barbs at the bottom end pointing back toward shaft
+      const ax  = bx + 5 * Math.sin(r - 0.35), ay  = by - 5 * Math.cos(r - 0.35);
+      const bax = bx + 5 * Math.sin(r + 0.35), bay = by - 5 * Math.cos(r + 0.35);
       return `
-        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}"
+        <line x1="${tx.toFixed(1)}" y1="${ty.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}"
           stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M${ax.toFixed(1)},${ay.toFixed(1)} L${tx.toFixed(1)},${ty.toFixed(1)} L${bax.toFixed(1)},${bay.toFixed(1)}"
+        <path d="M${ax.toFixed(1)},${ay.toFixed(1)} L${bx.toFixed(1)},${by.toFixed(1)} L${bax.toFixed(1)},${bay.toFixed(1)}"
           fill="${color}"/>`;
     };
 
@@ -452,6 +485,7 @@ class KazemBridgeCard extends HTMLElement {
 
     const mode       = this._mode();
     const isOn       = this._isOn();
+    const isFanOnly  = mode === 'fan_only';
     const accent     = MODE_COLORS[mode] || '#7b68ee';
     const targetTemp = this._attr('temperature', 22);
     const fanMode    = this._attr('fan_mode', 'auto');
@@ -461,6 +495,10 @@ class KazemBridgeCard extends HTMLElement {
     const outdoorT   = this._sensorValue(this._config.outdoor_sensor);
     const pending    = this._isPending();
     const hSwing     = this._attr('swing_horizontal_mode', 'normal');
+
+    // show '—' and disable ± buttons in fan_only mode
+    const tempDisplay = isFanOnly ? '—' : (isOn ? targetTemp.toFixed(1) : '—');
+    const tempDisabled = isFanOnly || !isOn;
 
     const css = `
       :host { display: block; }
@@ -478,7 +516,7 @@ class KazemBridgeCard extends HTMLElement {
       .header-right { display: flex; align-items: center; gap: 10px; }
       .power-btn {
         background: ${isOn ? accent : '#333'}; border: none; border-radius: 50%;
-        width: 36px; height: 36px; font-size: 16px; cursor: pointer; color: #fff;
+        width: 36px; height: 36px; cursor: pointer; color: #fff;
         transition: background 0.3s; display: flex; align-items: center; justify-content: center;
       }
       .pending-dot {
@@ -493,9 +531,10 @@ class KazemBridgeCard extends HTMLElement {
         font-size: 10px; color: #555; text-transform: uppercase;
         letter-spacing: 0.08em; margin-bottom: 6px;
       }
-      .mode-row { display: flex; gap: 5px; margin-bottom: 14px; flex-wrap: wrap; }
+      /* no flex-wrap; tighter min-width so all 6 buttons fit on mobile */
+      .mode-row { display: flex; gap: 5px; margin-bottom: 14px; }
       .mode-btn {
-        flex: 1; min-width: 48px;
+        flex: 1; min-width: 38px;
         background: #2a2a3a; border: 1px solid #333; border-radius: 10px;
         padding: 6px 3px; color: #aaa; cursor: pointer;
         display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -515,6 +554,8 @@ class KazemBridgeCard extends HTMLElement {
         transition: background 0.15s;
       }
       .temp-btn:active { background: #3a3a4a; }
+      /* greyed-out when disabled (fan_only mode) */
+      .temp-btn:disabled { opacity: 0.3; cursor: default; }
       .temp-value { font-size: 42px; font-weight: 300; color: ${accent}; line-height: 1; text-align: center; }
       .temp-unit { font-size: 13px; color: #555; text-align: center; }
       .vane-panels { display: flex; gap: 10px; margin-bottom: 12px; }
@@ -562,7 +603,8 @@ class KazemBridgeCard extends HTMLElement {
           <div class="title">${state.attributes.friendly_name || this._config.entity}</div>
           <div class="header-right">
             <div class="pending-dot" title="${pending ? 'Updating…' : ''}"></div>
-            <button class="power-btn" id="pwr" title="${isOn ? 'Turn off' : 'Turn on'}">${MODES[mode]?.icon || '⏻'}</button>
+            <!-- power button uses inline SVG icon -->
+            <button class="power-btn" id="pwr" title="${isOn ? 'Turn off' : 'Turn on'}">${POWER_SVG}</button>
           </div>
         </div>
         <div class="body">
@@ -571,12 +613,13 @@ class KazemBridgeCard extends HTMLElement {
           <div class="mode-row">${this._modeButtons(mode)}</div>
 
           <div class="temp-row">
-            <button class="temp-btn" id="tm">−</button>
+            <!-- disabled in fan_only mode -->
+            <button class="temp-btn" id="tm" ${tempDisabled ? 'disabled' : ''}>−</button>
             <div>
-              <div class="temp-value">${isOn ? targetTemp.toFixed(1) : '—'}</div>
+              <div class="temp-value">${tempDisplay}</div>
               <div class="temp-unit">°C target</div>
             </div>
-            <button class="temp-btn" id="tp">+</button>
+            <button class="temp-btn" id="tp" ${tempDisabled ? 'disabled' : ''}>+</button>
           </div>
 
           <div class="vane-panels">
