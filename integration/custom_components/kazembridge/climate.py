@@ -130,7 +130,6 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
             "wind_ud": d["wind_ud"],
             "wind_lr": d["wind_lr"],
             "entrust": 1 if d.get("entrust") else 0,
-            "model_type": d.get("model_type", 0),
         }
 
     async def _send(self, **overrides) -> None:

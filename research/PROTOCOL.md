@@ -116,7 +116,15 @@ Each tuple = 4 bytes: `[code, sub_code, value, 0xFF]`
 
 ---
 
-## Model type byte (byte 0, both halves)
+## Model type byte (byte 0)
+
+### Receive half (decode only)
+
+The device reports model type in byte 0 of the **receive half** only. The value must be AND-masked with `0x7F` to get the actual type — bit 7 is a device flag, not part of the model ID:
+
+```
+model_type = receive_byte_0 & 0x7F
+```
 
 | Value  | Model            |
 | ------ | ---------------- |
@@ -125,6 +133,14 @@ Each tuple = 4 bytes: `[code, sub_code, value, 0xFF]`
 | `0x02` | High-end JP 2023 |
 | `0x03` | ZT 2025          |
 | `0x40` | FDT 2023         |
+
+### Command half (encode)
+
+> **Critical:** byte 0 of the **command half** must always be `0x00`. Do NOT write model type into it. The device rejects commands where byte 0 ≠ 0x00 with result=12.
+>
+> **Critical:** byte 0 of the **receive half** you encode must also be `0x00`. The app re-encodes the receive half from scratch using `receive_init` (all zeros except byte 5=`0xFF`) — it does not echo the raw byte 0 from `getAirconStat`.
+
+The model type value is used only to determine which optional features are available (self-clean, vacant property, etc.). It is never written to the outgoing blob.
 
 ### Feature availability by model
 
@@ -193,3 +209,44 @@ Covers −30.0 °C (indices 0–15) to +52.0 °C (index 255). Non-linear spacing
 Covers −50.0 °C (indices 0–4) to +43.0 °C (index 255). Non-linear spacing.
 
 Full tables are in `integration/custom_components/kazembridge/mhi_codec.py`.
+
+---
+
+## Bug history — result=12 crashes (confirmed fixed 2026-05-25)
+
+### Symptoms
+Sending `setAirconStat` via the local API caused the physical AC unit to enter an abnormal state (result=12), locking it on and requiring a circuit breaker reset to recover. The IR remote continued to work normally throughout.
+
+### Root causes (all in `encode()` in `mhi_codec.py`)
+
+#### Bug 1 — Missing self-clean OFF bit (byte 12 bit 7)
+`c[12] |= 0x80` was absent. Per the protocol, bit 7 of command byte 12 must **always** be set — it signals "self-clean OFF". Without it the device returns result=12 immediately.
+
+The remote control's blob has byte 12=`0x00` because it uses a different internal encoding (IR protocol translated by the AC unit). The app API requires `0x80`.
+
+**Fix:** Added `c[12] |= 0x80`.
+
+#### Bug 2 — Position bits set during swing
+When vertical swing was ON (`wind_ud=0`), `c[3] |= 0x80` was also set, which is a vane position bit. The protocol states position bits must only be set when swing is OFF.
+
+Same issue for horizontal: when h-swing was ON (`wind_lr=0`), `c[11] |= 0x10` was set.
+
+**Fix:** Removed the erroneous OR operations.
+
+#### Bug 3 — Model type written to byte 0 of both halves (primary cause of result=12)
+`c[0] = model_type` and `r[0] = model_type` were set, sending the decoded receive-half model type (e.g. `0x81`) into the outgoing blob.
+
+**Why this was wrong:** Confirmed by reading `AirconStatCoder.smali` (decompiled SmartM-Air APK):
+- `commandToByte()` starts from `command_init` (byte 0 = `0x00`) and never writes byte 0.
+- `receiveToByte()` starts from `receive_init` (byte 0 = `0x00`) and never writes byte 0.
+- Byte 0 of the receive half reported by `getAirconStat` has bit 7 set as a device flag (`0x81` = Global 2022 with flag). The app strips it with `& 0x7F` to get the model ID, but never writes it back.
+
+Sending `0x81` at command byte 0 caused the device to return result=12 even when all other bytes were correct. This was the bug that survived after Bug 1 and Bug 2 were fixed.
+
+**Fix:** Removed `c[0]` and `r[0]` assignments entirely. Both stay `0x00`. Removed `model_type` parameter from `encode()`. Fixed `decode()` to return `r[0] & 0x7F`.
+
+### How it was debugged
+1. Confirmed `c[12] |= 0x80` was deployed — still got result=12.
+2. Sent the device's own unmodified blob back via curl — also got result=12 (expected: its command byte 12 = `0x00`).
+3. Read `AirconStatCoder.smali` → found `commandToByte` never writes byte 0, `byteToStat` applies `& 0x7F` mask to received byte 0.
+4. Fixed byte 0, tested via curl → result=0, AC turned on.

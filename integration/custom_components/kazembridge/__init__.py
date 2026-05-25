@@ -6,6 +6,7 @@ entry and forwards setup to the climate and sensor platforms.
 
 from pathlib import Path
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from .api import MhiApi
@@ -17,11 +18,9 @@ _CARD_URL = "/kazembridge_static/kazembridge-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    hass.http.register_static_path(
-        "/kazembridge_static",
-        str(Path(__file__).parent / "www"),
-        cache_headers=False,
-    )
+    await hass.http.async_register_static_paths([
+        StaticPathConfig("/kazembridge_static", str(Path(__file__).parent / "www"), False),
+    ])
     add_extra_js_url(hass, _CARD_URL)
     return True
 
