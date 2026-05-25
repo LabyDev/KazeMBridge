@@ -6,6 +6,7 @@ setAirconStat. A coordinator refresh is requested immediately after so the UI
 updates without waiting for the next poll cycle.
 """
 
+import logging
 import voluptuous as vol
 from homeassistant.components.climate import (
     ClimateEntity,
@@ -24,6 +25,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, FAN_MODES, FAN_MODE_TO_INT, FAN_INT_TO_MODE, SWING_MODES, SWING_MODE_TO_INT, SWING_INT_TO_MODE, H_SWING_OPTIONS, H_SWING_TO_INT, H_SWING_INT_TO_OPT
 from .coordinator import MhiCoordinator
 from .mhi_codec import encode
+
+_LOGGER = logging.getLogger(__name__)
 
 _SERVICE_SET_STATE = "set_state"
 _SET_STATE_SCHEMA = vol.Schema({
@@ -133,6 +136,7 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
         return "3d_auto" if self.coordinator.data.get("entrust") else PRESET_NONE
 
     async def async_set_full_state(self, data: dict) -> None:
+        _LOGGER.debug("set_full_state received: %s", dict(data))
         overrides = {}
         if "hvac_mode" in data:
             hm = data["hvac_mode"]
@@ -149,6 +153,7 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
             overrides["wind_ud"] = SWING_MODE_TO_INT[data["swing_mode"]]
         if "swing_horizontal_mode" in data:
             overrides["wind_lr"] = H_SWING_TO_INT[data["swing_horizontal_mode"]]
+        _LOGGER.debug("set_full_state overrides: %s", overrides)
         if overrides:
             await self._send(**overrides)
 
@@ -180,9 +185,12 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
     async def _send(self, **overrides) -> None:
         p = self._params()
         p.update(overrides)
+        _LOGGER.debug("_send params: %s", p)
         b64 = encode(**p)
+        _LOGGER.debug("_send blob: %s", b64)
         resp = await self.coordinator.api.set_aircon_stat(self._aircon_id, b64)
         result = resp.get("result", -1) if resp else -1
+        _LOGGER.debug("_send result: %s (full response: %s)", result, resp)
         if result != 0:
             raise HomeAssistantError(f"AC rejected command (result={result})")
         await self.coordinator.async_request_refresh()
