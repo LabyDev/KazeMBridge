@@ -15,23 +15,23 @@ SWING_INT_TO_MODE = {0: "swing", 1: "1", 2: "2", 3: "3", 4: "4"}
 
 # Horizontal vane positions (wind_lr 0=swing, 1-7=fixed positions)
 H_SWING_OPTIONS = [
-    "swing",
-    "normal",
     "both_left",
     "left_center",
     "both_center",
     "center_right",
     "both_right",
     "wide",
+    "right_left",
+    "swing",
 ]
 H_SWING_TO_INT = {
+    "both_left":    1,
+    "left_center":  2,
+    "both_center":  3,
+    "center_right": 4,
+    "both_right":   5,
+    "wide":         6,
+    "right_left":   7,
     "swing":        0,
-    "normal":       1,
-    "both_left":    2,
-    "left_center":  3,
-    "both_center":  4,
-    "center_right": 5,
-    "both_right":   6,
-    "wide":         7,
 }
 H_SWING_INT_TO_OPT = {v: k for k, v in H_SWING_TO_INT.items()}

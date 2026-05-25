@@ -35,29 +35,31 @@ const POWER_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http:/
     fill="currentColor"/>
 </svg>`;
 
-// Vertical vane: degrees from horizontal. 1=shallow, 4=steep down.
-const V_ANGLES = [12, 32, 55, 75];
-
-// Horizontal positions mapped to codec wind_lr values.
-// louver angles: 0=straight ahead, negative=left, positive=right.
+// Horizontal vane positions.
+// sides: [left_section, right_section] where each is 'L', 'M', 'R', or null (no line).
+// null sides = swing mode.
 const H_POSITIONS = [
-  { value: 'normal',       label: 'Normal',      desc: 'Both forward',                      louver: [0,    0   ] },
-  { value: 'both_left',    label: 'Both Left',   desc: 'Both sides left',                   louver: [-45, -45 ] },
-  { value: 'left_center',  label: 'Left + Mid',  desc: 'Left stays left, right goes center',louver: [-45,  0  ] },
-  { value: 'both_center',  label: 'Both Center', desc: 'Both sides center',                 louver: [0,    0  ] },
-  { value: 'center_right', label: 'Mid + Right', desc: 'Left goes center, right goes right',louver: [0,   45  ] },
-  { value: 'both_right',   label: 'Both Right',  desc: 'Both sides right',                  louver: [45,  45  ] },
-  { value: 'wide',         label: 'Wide',        desc: 'Left aims left, right aims right',  louver: [-60,  60 ] },
-  { value: 'swing',        label: 'Swing',       desc: 'Auto swing',                        louver: null },
+  { value: 'both_left',    label: 'Both L',   desc: 'Both sections aim left',           sides: ['L',  'L' ] },
+  { value: 'left_center',  label: 'L + Mid',  desc: 'Left aims left, right center',     sides: ['L',  'M' ] },
+  { value: 'both_center',  label: 'Both Mid', desc: 'Both sections center',             sides: ['M',  'M' ] },
+  { value: 'center_right', label: 'Mid + R',  desc: 'Left center, right aims right',    sides: ['M',  'R' ] },
+  { value: 'both_right',   label: 'Both R',   desc: 'Both sections aim right',          sides: ['R',  'R' ] },
+  { value: 'wide',         label: 'Wide',     desc: 'Left aims left, right aims right', sides: ['L',  'R' ] },
+  { value: 'right_left',   label: 'R + L',    desc: 'Left aims right, right aims left', sides: ['R',  'L' ] },
+  { value: 'swing',        label: 'Swing',    desc: 'Auto swing',                       sides: null },
 ];
 
-// Vertical positions (codec swing_mode values)
+// Angle in degrees for each horizontal direction symbol (top-view, 0=straight forward)
+const H_DIR_ANGLE = { L: -45, M: 0, R: 45 };
+
+// Vertical vane positions.
+// angle: degrees below horizontal. null = swing.
 const V_POSITIONS = [
+  { value: '1',     label: '1',     angle: 10   },
+  { value: '2',     label: '2',     angle: 28   },
+  { value: '3',     label: '3',     angle: 48   },
+  { value: '4',     label: '4',     angle: 65   },
   { value: 'swing', label: 'Swing', angle: null },
-  { value: '1',     label: 'High',  angle: V_ANGLES[0] },
-  { value: '2',     label: '',      angle: V_ANGLES[1] },
-  { value: '3',     label: '',      angle: V_ANGLES[2] },
-  { value: '4',     label: 'Low',   angle: V_ANGLES[3] },
 ];
 
 class KazemBridgeCard extends HTMLElement {
@@ -77,7 +79,7 @@ class KazemBridgeCard extends HTMLElement {
 
   connectedCallback() {
     this._triggerPoll();
-    this._pollInterval = setInterval(() => this._triggerPoll(), 8000);
+    this._pollInterval = setInterval(() => this._triggerPoll(), 4000);
   }
 
   disconnectedCallback() {
@@ -230,150 +232,184 @@ class KazemBridgeCard extends HTMLElement {
 
   // ─── SVG helpers ──────────────────────────────────────────────────────────
 
-  /**
-   * Front view of the AC unit — shows horizontal airflow direction.
-   * Front view arrows point downward (away from grille), arrowY at bottom edge of grille.
-   */
-  _frontViewSvg(hSwingValue) {
-    const W = 200, BH = 40, BY = 14;
-    const pos = H_POSITIONS.find(p => p.value === hSwingValue) || H_POSITIONS[0];
-    const isSwing = pos.louver === null;
+  // ─── SVG views ───────────────────────────────────────────────────────────
 
-    // arrows point downward from the grille bottom edge.
-    // deg=0 → straight down, negative=left, positive=right.
-    const arrow = (cx, cy, deg, opacity = 1) => {
-      const len = 36;
-      const r = deg * Math.PI / 180;
-      // Downward: ey = cy + len*cos(r), ex = cx + len*sin(r)
-      const ex = cx + len * Math.sin(r);
-      const ey = cy + len * Math.cos(r);
-      const mx = cx + (len - 6) * Math.sin(r);
-      const my = cy + (len - 6) * Math.cos(r);
-      // Arrowhead barbs: perpendicular to forward direction, pointing back toward shaft
-      const lx = mx - 7 * Math.cos(r + 0.4), ly = my + 7 * Math.sin(r + 0.4);
-      const rx = mx - 7 * Math.cos(r - 0.4), ry = my + 7 * Math.sin(r - 0.4);
-      return `
-        <g opacity="${opacity}">
-          <line x1="${cx}" y1="${cy}" x2="${(ex - 5 * Math.sin(r)).toFixed(1)}" y2="${(ey - 5 * Math.cos(r)).toFixed(1)}"
-            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3"/>
-          <path d="M${lx.toFixed(1)},${ly.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)} L${rx.toFixed(1)},${ry.toFixed(1)}"
-            fill="#4fc3f7"/>
-        </g>`;
+  /**
+   * Front view (top-down perspective): shows the two horizontal sections of the AC
+   * and which direction each is aimed. Arrows point forward out of the unit (downward
+   * in the SVG, as if you're looking down at the AC from above).
+   *
+   * For swing (value '8'): briefly flash all positions lit, then animate.
+   * For normal (value '0'): no arrows at all.
+   */
+  _frontViewSvg(hValue) {
+    const VB_W = 200, VB_H = 100;
+    const BX = 4, BY = 8, BW = VB_W - 8, BH = 36;
+    const arrowRootY = BY + BH;  // arrows hang below grille
+
+    // Each half of the AC is centred at these X positions
+    const MID = VB_W / 2;
+    const lx = MID / 2;          // centre of left section
+    const rx = MID + MID / 2;    // centre of right section
+
+    const pos = H_POSITIONS.find(p => p.value === hValue) || H_POSITIONS[0];
+
+    // Draw one downward arrow tilted by deg (-=left, +=right, 0=straight forward)
+    const arrow = (cx, deg, color = '#4fc3f7', opacity = 1) => {
+      const LEN = 36, HEAD = 7;
+      const r = (deg * Math.PI) / 180;
+      const adx = Math.sin(r), ady = Math.cos(r);   // along-arrow unit vector
+      const pdx = Math.cos(r), pdy = -Math.sin(r);  // perpendicular unit vector
+      const x0 = cx, y0 = arrowRootY;
+      const xt = x0 + adx * LEN, yt = y0 + ady * LEN;
+      const xb = xt - adx * HEAD, yb = yt - ady * HEAD;
+      return `<g opacity="${opacity}">
+        <line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}"
+              x2="${(xt - adx*3).toFixed(1)}" y2="${(yt - ady*3).toFixed(1)}"
+          stroke="${color}" stroke-width="1.8" stroke-dasharray="4,3"/>
+        <path d="M${(xb - pdx*HEAD*0.55).toFixed(1)},${(yb - pdy*HEAD*0.55).toFixed(1)}
+                 L${xt.toFixed(1)},${yt.toFixed(1)}
+                 L${(xb + pdx*HEAD*0.55).toFixed(1)},${(yb + pdy*HEAD*0.55).toFixed(1)}"
+          fill="${color}"/>
+      </g>`;
     };
 
-    const cx1 = W / 2 - 28, cx2 = W / 2 + 28;
-    // arrowY at bottom edge of grille (not 6px below)
-    const arrowY = BY + BH;
+    const body = `
+      <rect x="${BX}" y="${BY}" width="${BW}" height="${BH}" rx="6" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
+      <line x1="${BX+12}" y1="${BY+11}" x2="${BX+BW-12}" y2="${BY+11}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="${BX+12}" y1="${BY+21}" x2="${BX+BW-12}" y2="${BY+21}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="${BX+12}" y1="${BY+31}" x2="${BX+BW-12}" y2="${BY+31}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="${MID}" y1="${BY+4}" x2="${MID}" y2="${BY+BH-4}" stroke="#2a2a3a" stroke-width="1.5"/>
+      <circle cx="${BX+BW-10}" cy="${BY+8}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>`;
 
-    let arrowContent;
-    if (isSwing) {
-      // swing animation goes downward — arrows sweep left↔right below the grille
-      const swingDegs = [-60, -30, 0, 30, 60, 30, 0, -30, -60];
-      const kts = swingDegs.map((_, i) => (i / (swingDegs.length - 1)).toFixed(3)).join(';');
-      arrowContent = `
-        <g id="arr1" opacity="0.85">
-          <line x1="${cx1}" y1="${arrowY}" x2="${cx1}" y2="${arrowY + 30}"
-            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3">
+    let arrowContent = '';
+
+    if (pos.sides === null) {
+      // Swing: animate left arrow (left section) and right arrow (right section) sweeping
+      // Each swings independently: left section sweeps L→R, right section R→L
+      const degs = [-45, -22, 0, 22, 45, 22, 0, -22, -45];
+      const kts = degs.map((_, i) => (i / (degs.length - 1)).toFixed(3)).join(';');
+      const sp  = degs.slice(0, -1).map(() => '0.45 0 0.55 1').join(';');
+      const animLine = (cx, mirror) => `
+        <g opacity="0.85">
+          <line x1="${cx}" y1="${arrowRootY}" x2="${cx}" y2="${arrowRootY + 34}"
+            stroke="#4fc3f7" stroke-width="1.8" stroke-dasharray="4,3">
             <animateTransform attributeName="transform" type="rotate"
-              values="${swingDegs.map(d => `${d} ${cx1} ${arrowY}`).join(';')}"
-              keyTimes="${kts}" dur="2.5s" repeatCount="indefinite" calcMode="spline"
-              keySplines="${swingDegs.slice(0,-1).map(()=>'0.4 0 0.6 1').join(';')}"/>
-          </line>
-        </g>
-        <g id="arr2" opacity="0.85">
-          <line x1="${cx2}" y1="${arrowY}" x2="${cx2}" y2="${arrowY + 30}"
-            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3">
-            <animateTransform attributeName="transform" type="rotate"
-              values="${swingDegs.map(d => `${-d} ${cx2} ${arrowY}`).join(';')}"
-              keyTimes="${kts}" dur="2.5s" repeatCount="indefinite" calcMode="spline"
-              keySplines="${swingDegs.slice(0,-1).map(()=>'0.4 0 0.6 1').join(';')}"/>
+              values="${degs.map(d => `${mirror ? -d : d} ${cx} ${arrowRootY}`).join(';')}"
+              keyTimes="${kts}" dur="2.4s" repeatCount="indefinite" begin="0s"
+              calcMode="spline" keySplines="${sp}"/>
           </line>
         </g>`;
+      arrowContent = animLine(lx, false) + animLine(rx, true);
+
+    } else if (pos.sides[0] === null && pos.sides[1] === null) {
+      // Normal (0): no arrows
+      arrowContent = '';
+
     } else {
-      arrowContent = arrow(cx1, arrowY, pos.louver[0], 0.85) + arrow(cx2, arrowY, pos.louver[1], 0.85);
+      // Fixed positions: draw arrow for each section that has a direction
+      const [leftDir, rightDir] = pos.sides;
+      if (leftDir)  arrowContent += arrow(lx, H_DIR_ANGLE[leftDir],  '#4fc3f7', 0.9);
+      if (rightDir) arrowContent += arrow(rx, H_DIR_ANGLE[rightDir], '#4fc3f7', 0.9);
     }
 
-    return `<svg viewBox="0 0 ${W} 110" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
-      <!-- AC front face -->
-      <rect x="0" y="${BY}" width="${W}" height="${BH}" rx="7" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
-      <line x1="16" y1="${BY + 10}" x2="${W - 16}" y2="${BY + 10}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="16" y1="${BY + 20}" x2="${W - 16}" y2="${BY + 20}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="16" y1="${BY + 30}" x2="${W - 16}" y2="${BY + 30}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <circle cx="${W - 14}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
-      <!-- Airflow arrows -->
+    return `<svg viewBox="0 0 ${VB_W} ${VB_H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
+      ${body}
       ${arrowContent}
     </svg>`;
   }
 
   /**
-   * Side view of the AC unit — shows vertical vane angle.
-   * Side view — body on right, vane swings left-downward, vane swings left-downward.
+   * Side view: wall-mounted AC on the right, blowing left.
+   * Body top-right. Vane from bottom-left face. Three flow arrows stream leftward.
    */
-  _sideViewSvg(vSwingValue) {
-    const isSwing = vSwingValue === 'swing';
-    // body on right side
-    const BW = 60, BH = 30, BX = 130, BY = 18;
-    // VX = BX (front face = left edge of body), vane goes left+down
+  _sideViewSvg(vValue) {
+    const VB_W = 200, VB_H = 105;
+    const BW = 68, BH = 30, BX = VB_W - BW - 4, BY = 6;
+    // Vane pivots at bottom-left corner (front/output face of unit)
     const VX = BX, VY = BY + BH;
-    // shorter vane
-    const VLEN = 34;
+    const VLEN = 48;
 
-    const activeAngle = isSwing
-      ? V_ANGLES[0]
-      : (V_ANGLES[parseInt(vSwingValue, 10) - 1] ?? V_ANGLES[0]);
+    const vpos    = V_POSITIONS.find(p => p.value === vValue) || V_POSITIONS[0];
+    const isSwing = vValue === 'swing';
 
-    // vane endpoint flipped — goes left+down: x decreases, y increases
-    const ep = deg => {
-      const r = deg * Math.PI / 180;
+    // Vane tip for a given angle below horizontal
+    const vaneEnd = deg => {
+      const r = (deg * Math.PI) / 180;
       return [VX - VLEN * Math.cos(r), VY + VLEN * Math.sin(r)];
     };
 
-    const [vx2, vy2] = ep(activeAngle);
-
-    const swingValues = [...V_ANGLES, ...V_ANGLES.slice(0, -1).reverse()];
-    const rotatePath = swingValues.map(a => `${a} ${VX},${VY}`).join(';');
-    const keyTimes = swingValues.map((_, i) => (i / (swingValues.length - 1)).toFixed(3)).join(';');
-
-    // arrow SVG also goes left-downward
-    const arrowSvg = (deg, opacity = 1) => {
-      const r = deg * Math.PI / 180;
-      const x1 = VX - 12 * Math.cos(r), y1 = VY + 12 * Math.sin(r);
-      const x2 = VX - (VLEN + 18) * Math.cos(r), y2 = VY + (VLEN + 18) * Math.sin(r);
-      const tip = [x2, y2];
-      const left = [x2 + 6 * Math.cos(r - 0.4), y2 - 6 * Math.sin(r - 0.4)];
-      const right = [x2 + 6 * Math.cos(r + 0.4), y2 - 6 * Math.sin(r + 0.4)];
-      return `
-        <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${(x2 + 5 * Math.cos(r)).toFixed(1)}" y2="${(y2 - 5 * Math.sin(r)).toFixed(1)}"
-          stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3" opacity="${opacity}"/>
-        <path d="M${left[0].toFixed(1)},${left[1].toFixed(1)} L${tip[0].toFixed(1)},${tip[1].toFixed(1)} L${right[0].toFixed(1)},${right[1].toFixed(1)}"
-          fill="#4fc3f7" opacity="${opacity}"/>`;
+    // Three parallel flow arrows fanning out leftward from the vane tip.
+    // Spaced perpendicular to the vane direction so they look like airflow lines.
+    const flowArrows = deg => {
+      const r   = (deg * Math.PI) / 180;
+      const adx = -Math.cos(r), ady = Math.sin(r);   // unit vec along airflow (left+down)
+      const pdx = -Math.sin(r), pdy = -Math.cos(r);  // unit vec perpendicular to vane
+      const LEN = 32, HEAD = 6;
+      const tipX = VX + adx * VLEN, tipY = VY + ady * VLEN;
+      // three origins spread perpendicular around the tip
+      return [-9, 0, 9].map((off, i) => {
+        const ox = tipX + pdx * off + adx * 2;
+        const oy = tipY + pdy * off + ady * 2;
+        const ex = ox + adx * LEN, ey = oy + ady * LEN;
+        const xb = ex - adx * HEAD, yb = ey - ady * HEAD;
+        const op = i === 1 ? 0.9 : 0.5;
+        // perpendicular for arrowhead barbs
+        const bpx = pdy, bpy = -pdx;
+        return `<g opacity="${op}">
+          <line x1="${ox.toFixed(1)}" y1="${oy.toFixed(1)}"
+                x2="${(ex - adx*2).toFixed(1)}" y2="${(ey - ady*2).toFixed(1)}"
+            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <path d="M${(xb + bpx*HEAD*0.55).toFixed(1)},${(yb + bpy*HEAD*0.55).toFixed(1)}
+                   L${ex.toFixed(1)},${ey.toFixed(1)}
+                   L${(xb - bpx*HEAD*0.55).toFixed(1)},${(yb - bpy*HEAD*0.55).toFixed(1)}"
+            fill="#4fc3f7"/>
+        </g>`;
+      }).join('');
     };
 
-    const vaneContent = isSwing
-      ? `<g>
-          <line x1="${VX}" y1="${VY}" x2="${vx2.toFixed(1)}" y2="${vy2.toFixed(1)}"
-            stroke="#aaa" stroke-width="5" stroke-linecap="round">
-            <animateTransform attributeName="transform" type="rotate"
-              values="${rotatePath}" keyTimes="${keyTimes}"
-              dur="3s" repeatCount="indefinite" calcMode="spline"
-              keySplines="${swingValues.slice(0, -1).map(() => '0.4 0 0.6 1').join(';')}"/>
-          </line>
-        </g>`
-      : `<line x1="${VX}" y1="${VY}" x2="${vx2.toFixed(1)}" y2="${vy2.toFixed(1)}"
-          stroke="#aaa" stroke-width="5" stroke-linecap="round"/>
-        ${arrowSvg(activeAngle, 0.75)}`;
+    let vaneContent = '';
+    {
+      const displayAngle = isSwing ? V_POSITIONS[0].angle : vpos.angle;
+      const [vx2, vy2] = vaneEnd(displayAngle);
 
-    return `<svg viewBox="0 0 200 110" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
-      <!-- AC side profile body (right side) -->
+      if (isSwing) {
+        const swingAngles = V_POSITIONS.filter(p => p.angle !== null).map(p => p.angle);
+        const fullCycle   = [...swingAngles, ...swingAngles.slice(0, -1).reverse()];
+        const kts = fullCycle.map((_, i) => (i / (fullCycle.length - 1)).toFixed(3)).join(';');
+        const sp  = fullCycle.slice(0, -1).map(() => '0.4 0 0.6 1').join(';');
+        vaneContent = `
+          <line x1="${VX}" y1="${VY}" x2="${vx2.toFixed(1)}" y2="${vy2.toFixed(1)}"
+              stroke="#bbb" stroke-width="5" stroke-linecap="round">
+            <animateTransform attributeName="transform" type="rotate"
+              values="${fullCycle.map(a => `${a} ${VX} ${VY}`).join(';')}"
+              keyTimes="${kts}" dur="3s" repeatCount="indefinite" begin="0s"
+              calcMode="spline" keySplines="${sp}"/>
+          </line>`;
+      } else {
+        vaneContent =
+          `<line x1="${VX}" y1="${VY}" x2="${vx2.toFixed(1)}" y2="${vy2.toFixed(1)}"
+              stroke="#bbb" stroke-width="5" stroke-linecap="round"/>` +
+          flowArrows(vpos.angle);
+      }
+    }
+
+    // Grille tick marks along the bottom face of the body
+    const ticks = Array.from({length: 6}, (_, i) =>
+      `<line x1="${BX + 8 + i*10}" y1="${BY+BH}" x2="${BX + 8 + i*10}" y2="${BY+BH+5}"
+         stroke="#3a3a4a" stroke-width="1.5"/>`
+    ).join('');
+
+    return `<svg viewBox="0 0 ${VB_W} ${VB_H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
       <rect x="${BX}" y="${BY}" width="${BW}" height="${BH}" rx="5" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
-      <!-- Front face indicator line (left edge of body) -->
-      <line x1="${BX}" y1="${BY}" x2="${BX}" y2="${BY + BH}" stroke="#4a4a5a" stroke-width="2"/>
-      <!-- LED on back-right of body -->
-      <circle cx="${BX + BW - 12}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
-      <!-- Vane -->
+      ${ticks}
+      <line x1="${BX}" y1="${BY+3}" x2="${BX}" y2="${BY+BH-3}" stroke="#4a4a5a" stroke-width="2.5"/>
+      <circle cx="${BX+BW-10}" cy="${BY+8}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
       ${vaneContent}
     </svg>`;
   }
+
+  // ─── Buttons ──────────────────────────────────────────────────────────────
 
   // ─── Buttons ──────────────────────────────────────────────────────────────
 
@@ -401,30 +437,35 @@ class KazemBridgeCard extends HTMLElement {
 
   _verticalVaneButtons(current) {
     return V_POSITIONS.map(p => {
+      const active  = p.value === current;
       const isSwing = p.value === 'swing';
-      const active = p.value === current;
-      const icon = isSwing
-        // ↕ replaced with inline SVG showing two opposing vertical arrows
-        ? `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
-            <path d="M7 10l5-5 5 5H7zm10 4l-5 5-5-5h10z" fill="currentColor"/>
-          </svg>`
-        : (() => {
-            const r = p.angle * Math.PI / 180;
-            // scaleX(-1) to mirror arrow left-downward after side view flip
-            const x2 = 4 + 16 * Math.cos(r), y2 = 4 + 16 * Math.sin(r);
-            const tx = x2, ty = y2;
-            const lx = x2 - 6 * Math.cos(r - 0.4), ly = y2 - 6 * Math.sin(r - 0.4);
-            const rx2 = x2 - 6 * Math.cos(r + 0.4), ry = y2 - 6 * Math.sin(r + 0.4);
-            return `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg"
-                style="transform:scaleX(-1)">
-              <line x1="4" y1="4" x2="${(x2 - 4 * Math.cos(r)).toFixed(1)}" y2="${(y2 - 4 * Math.sin(r)).toFixed(1)}"
-                stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              <path d="M${lx.toFixed(1)},${ly.toFixed(1)} L${tx.toFixed(1)},${ty.toFixed(1)} L${rx2.toFixed(1)},${ry.toFixed(1)}"
-                fill="currentColor"/>
-            </svg>`;
-          })();
+
+      let icon;
+      if (isSwing) {
+        icon = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
+          <path d="M7 10l5-5 5 5H7zm10 4l-5 5-5-5h10z" fill="currentColor"/>
+        </svg>`;
+      } else {
+        // Line from top-right going left+down at the vane angle, matching side view
+        const r   = (p.angle * Math.PI) / 180;
+        const ox  = 20, oy = 5;
+        const LEN = 15, HEAD = 5;
+        const adx = -Math.cos(r), ady = Math.sin(r);  // left+down direction
+        const pdx = -Math.sin(r), pdy = -Math.cos(r);
+        const ex  = ox + adx * LEN, ey = oy + ady * LEN;
+        const xb  = ex - adx * HEAD, yb = ey - ady * HEAD;
+        icon = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
+          <line x1="${ox}" y1="${oy}" x2="${(ex + adx*2).toFixed(1)}" y2="${(ey + ady*2).toFixed(1)}"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M${(xb - pdx*HEAD*0.6).toFixed(1)},${(yb - pdy*HEAD*0.6).toFixed(1)}
+                   L${ex.toFixed(1)},${ey.toFixed(1)}
+                   L${(xb + pdx*HEAD*0.6).toFixed(1)},${(yb + pdy*HEAD*0.6).toFixed(1)}"
+            fill="currentColor"/>
+        </svg>`;
+      }
+
       return `<button class="vane-btn ${active ? 'active' : ''}" data-vswing="${p.value}"
-          title="${p.label || `Position ${p.value}`}">
+          title="${p.label}">
           ${icon}
         </button>`;
     }).join('');
@@ -434,41 +475,58 @@ class KazemBridgeCard extends HTMLElement {
     return H_POSITIONS.map(p => `
       <button class="vane-btn h-vane-btn ${p.value === currentH ? 'active' : ''}"
         data-hswing="${p.value}" title="${p.desc}">
-        ${this._hLouverSvg(p.louver, p.value === currentH)}
+        ${this._hSectionSvg(p.sides, p.value === currentH)}
       </button>`).join('');
   }
 
-  _hLouverSvg(angles, active = false) {
-    const color = active ? '#4fc3f7' : '#666';
-    const W = 36, H = 36, CX = W / 2, CY = H / 2;
-    const LEN = 10;
+  // Top-view icon for a horizontal vane button.
+  // Shows a small body split in two halves, with a directional arrow per section.
+  _hSectionSvg(sides, active = false) {
+    const W = 36, H = 32;
+    const col   = active ? '#4fc3f7' : '#666';
+    const mid   = W / 2;
+    const bodyT = 4, bodyH = 9;
+    const rootY = bodyT + bodyH;
 
-    if (!angles) {
-      // ↔ replaced with inline SVG showing two opposing horizontal arrows
+    const bodyRect = `
+      <rect x="2" y="${bodyT}" width="${W-4}" height="${bodyH}" rx="3"
+        fill="#25252f" stroke="${col}" stroke-width="1" opacity="0.7"/>
+      <line x1="${mid}" y1="${bodyT+2}" x2="${mid}" y2="${rootY-2}"
+        stroke="${col}" stroke-width="1" opacity="0.5"/>`;
+
+    if (sides === null) {
+      // Swing icon: two outward arrows flanking a centre dot
       return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-        <path d="M4 18l5-4v3h5v2H9v3L4 18zm28 0l-5 4v-3h-5v-2h5v-3l5 4z" fill="${color}"/>
+        ${bodyRect}
+        <path d="M4,${rootY+9} l4,-3 v2 h4 v2 h-4 v2 z" fill="${col}"/>
+        <path d="M32,${rootY+9} l-4,-3 v2 h-4 v2 h4 v2 z" fill="${col}"/>
+        <circle cx="${mid}" cy="${rootY+9}" r="1.5" fill="${col}" opacity="0.6"/>
       </svg>`;
     }
 
-    // arrowhead at BOTTOM end (by/bx side) so arrow points forward/out of unit
-    const louver = (cx, deg) => {
-      const r = deg * Math.PI / 180;
-      const dx = LEN * Math.sin(r), dy = LEN * Math.cos(r);
-      const tx = cx + dx, ty = CY - dy;   // top end
-      const bx = cx - dx, by = CY + dy;   // bottom end (forward/out) — arrowhead here
-      // Barbs at the bottom end pointing back toward shaft
-      const ax  = bx + 5 * Math.sin(r - 0.35), ay  = by - 5 * Math.cos(r - 0.35);
-      const bax = bx + 5 * Math.sin(r + 0.35), bay = by - 5 * Math.cos(r + 0.35);
+    const arrow = (cx, dir) => {
+      if (!dir) return '';
+      const LEN = 11, HEAD = 4;
+      const deg = H_DIR_ANGLE[dir];
+      const r   = (deg * Math.PI) / 180;
+      const adx = Math.sin(r), ady = Math.cos(r);
+      const pdx = Math.cos(r), pdy = -Math.sin(r);
+      const xt  = cx + adx * LEN, yt = rootY + ady * LEN;
+      const xb  = xt - adx * HEAD, yb = yt - ady * HEAD;
       return `
-        <line x1="${tx.toFixed(1)}" y1="${ty.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}"
-          stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M${ax.toFixed(1)},${ay.toFixed(1)} L${bx.toFixed(1)},${by.toFixed(1)} L${bax.toFixed(1)},${bay.toFixed(1)}"
-          fill="${color}"/>`;
+        <line x1="${cx}" y1="${rootY}" x2="${(xt - adx*2).toFixed(1)}" y2="${(yt - ady*2).toFixed(1)}"
+          stroke="${col}" stroke-width="1.5" stroke-dasharray="3,2"/>
+        <path d="M${(xb - pdx*HEAD*0.6).toFixed(1)},${(yb - pdy*HEAD*0.6).toFixed(1)}
+                 L${xt.toFixed(1)},${yt.toFixed(1)}
+                 L${(xb + pdx*HEAD*0.6).toFixed(1)},${(yb + pdy*HEAD*0.6).toFixed(1)}"
+          fill="${col}"/>`;
     };
 
+    const [leftDir, rightDir] = sides;
     return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-      ${louver(CX - 9, angles[0])}
-      ${louver(CX + 9, angles[1])}
+      ${bodyRect}
+      ${arrow(mid / 2, leftDir)}
+      ${arrow(mid + mid / 2, rightDir)}
     </svg>`;
   }
 
@@ -561,7 +619,7 @@ class KazemBridgeCard extends HTMLElement {
       .vane-panels { display: flex; gap: 10px; margin-bottom: 12px; }
       .vane-panel { flex: 1; display: flex; flex-direction: column; align-items: center; }
       .vane-panel .section-label { margin-bottom: 4px; }
-      .vane-row { display: flex; gap: 5px; margin-bottom: 14px; flex-wrap: wrap; }
+      .vane-row { display: flex; gap: 5px; margin-bottom: 14px; }
       .vane-btn {
         flex: 1; min-width: 36px;
         background: #2a2a3a; border: 1px solid #333; border-radius: 8px;
