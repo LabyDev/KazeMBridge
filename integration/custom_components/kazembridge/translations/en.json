@@ -1,4 +1,4 @@
-﻿{
+{
   "config": {
     "step": {
       "user": {
@@ -11,7 +11,7 @@
     },
     "error": {
       "cannot_connect": "Cannot connect to the device. Check the IP address and that the adapter is on your local network.",
-      "operator_list_full": "The AC operator list is full. Redo the Wi-Fi setup on the adapter (via the SmartM-Air app) to reset the list, then try again.",
+      "operator_list_full": "The AC operator list is full. Reset the Wi-Fi module using the remote control button combination (see your AC manual) to clear the list, then try again.",
       "register_failed": "Failed to register with the AC.",
       "unknown": "Unexpected error. Check the logs."
     },
@@ -20,4 +20,3 @@
     }
   }
 }
-

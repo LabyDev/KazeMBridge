@@ -12,13 +12,14 @@ from homeassistant.components.climate import (
     HVACMode,
     PRESET_NONE,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .const import DOMAIN, FAN_MODES, FAN_MODE_TO_INT, FAN_INT_TO_MODE, SWING_MODES, SWING_MODE_TO_INT, SWING_INT_TO_MODE
+from .const import DOMAIN, FAN_MODES, FAN_MODE_TO_INT, FAN_INT_TO_MODE, SWING_MODES, SWING_MODE_TO_INT, SWING_INT_TO_MODE, H_SWING_OPTIONS, H_SWING_TO_INT, H_SWING_INT_TO_OPT
 from .coordinator import MhiCoordinator
 from .mhi_codec import encode
 
@@ -56,6 +57,7 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
     ]
     _attr_fan_modes = FAN_MODES
     _attr_swing_modes = SWING_MODES
+    _attr_swing_horizontal_modes = H_SWING_OPTIONS
     _attr_preset_modes = [PRESET_NONE, "3d_auto"]
     _attr_supported_features = (
         ClimateEntityFeature.TURN_ON
@@ -63,6 +65,7 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
         | ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.FAN_MODE
         | ClimateEntityFeature.SWING_MODE
+        | ClimateEntityFeature.SWING_HORIZONTAL_MODE
         | ClimateEntityFeature.PRESET_MODE
     )
 
@@ -97,6 +100,10 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
         return SWING_INT_TO_MODE.get(self.coordinator.data["wind_ud"], "1")
 
     @property
+    def swing_horizontal_mode(self) -> str:
+        return H_SWING_INT_TO_OPT.get(self.coordinator.data.get("wind_lr", 1), "normal")
+
+    @property
     def preset_mode(self) -> str:
         return "3d_auto" if self.coordinator.data.get("entrust") else PRESET_NONE
 
@@ -107,13 +114,10 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
     def extra_state_attributes(self) -> dict:
         d = self.coordinator.data
         return {
-            "wind_lr": d.get("wind_lr"),
             "indoor_temp": d.get("indoor_temp"),
             "outdoor_temp": d.get("outdoor_temp"),
-            "num_of_account": d.get("num_of_account"),
-            "led_stat": d.get("led_stat"),
-            "auto_heating": d.get("auto_heating"),
             "model_type": d.get("model_type"),
+            "error_code": d.get("error_code"),
         }
 
     def _params(self) -> dict:
@@ -133,7 +137,10 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
         p = self._params()
         p.update(overrides)
         b64 = encode(**p)
-        await self.coordinator.api.set_aircon_stat(self._aircon_id, b64)
+        resp = await self.coordinator.api.set_aircon_stat(self._aircon_id, b64)
+        result = resp.get("result", -1) if resp else -1
+        if result != 0:
+            raise HomeAssistantError(f"AC rejected command (result={result})")
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -150,6 +157,9 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         await self._send(wind_ud=SWING_MODE_TO_INT[swing_mode])
+
+    async def async_set_swing_horizontal_mode(self, swing_mode: str) -> None:
+        await self._send(wind_lr=H_SWING_TO_INT[swing_mode])
 
     async def async_turn_on(self) -> None:
         await self._send(operation=1)

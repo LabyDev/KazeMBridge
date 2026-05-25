@@ -1,9 +1,8 @@
 /**
  * kazembridge-card — Lovelace custom card for MHI WF-RAC air conditioners.
  *
- * Installation:
- *   1. Copy this file to your HA config/www/ directory.
- *   2. In Lovelace resources, add /local/kazembridge-card.js (type: module).
+ * Served automatically by the KazeMBridge integration at /kazembridge_static/kazembridge-card.js.
+ * No manual installation needed — the integration registers it via add_extra_js_url.
  *
  * Card config:
  *   type: custom:kazembridge-card
@@ -164,21 +163,11 @@ class KazemBridgeCard extends HTMLElement {
   }
 
   _setHSwing(value) {
-    // Horizontal vane is a select entity — entity_id derived from the climate entity_id
-    // by replacing the domain prefix and appending _horizontal_vane.
-    const base = this._config.entity.replace(/^climate\./, '');
-    const selectId = `select.${base}_horizontal_vane`;
-    this._hass.callService('select', 'select_option', {
-      entity_id: selectId,
-      option: value,
-    });
-    this._pending = { field: 'h_swing', value, until: Date.now() + PENDING_MS };
-    this._render();
-    setTimeout(() => { this._pending = null; this._render(); }, PENDING_MS);
+    this._call('set_swing_horizontal_mode', { swing_horizontal_mode: value }, 'h_swing', value);
   }
 
   _toggleEntrust() {
-    const cur = this._attr('entrust', false);
+    const cur = this._attr('preset_mode', 'none') === '3d_auto';
     this._hass.callService('climate', 'set_preset_mode', {
       entity_id: this._config.entity,
       preset_mode: cur ? 'none' : '3d_auto',
@@ -373,18 +362,12 @@ class KazemBridgeCard extends HTMLElement {
     const targetTemp = this._attr('temperature', 22);
     const fanMode    = this._attr('fan_mode', 'auto');
     const swingMode  = this._attr('swing_mode', '1');
-    const entrust    = this._attr('entrust', false);
+    const entrust    = this._attr('preset_mode', 'none') === '3d_auto';
     const indoorT    = this._sensorValue(this._config.indoor_sensor);
     const outdoorT   = this._sensorValue(this._config.outdoor_sensor);
     const pending    = this._isPending();
 
-    // Read horizontal vane from the select entity (select.<base>_horizontal_vane).
-    const hSwing = (() => {
-      if (this._pending?.field === 'h_swing') return this._pending.value;
-      const base = this._config.entity.replace(/^climate\./, '');
-      const sel = this._hass?.states[`select.${base}_horizontal_vane`];
-      return sel?.state || 'normal';
-    })();
+    const hSwing = this._attr('swing_horizontal_mode', 'normal');
 
     const css = `
       :host { display: block; }

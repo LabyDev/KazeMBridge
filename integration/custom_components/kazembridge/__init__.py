@@ -4,13 +4,26 @@ Entry point for the integration. Creates one MhiApi + MhiCoordinator per config
 entry and forwards setup to the climate and sensor platforms.
 """
 
+from pathlib import Path
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from .api import MhiApi
 from .const import DOMAIN
 from .coordinator import MhiCoordinator
 
-PLATFORMS = ["climate", "sensor", "select"]
+PLATFORMS = ["climate", "sensor"]
+_CARD_URL = "/kazembridge_static/kazembridge-card.js"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    hass.http.register_static_path(
+        "/kazembridge_static",
+        str(Path(__file__).parent / "www"),
+        cache_headers=False,
+    )
+    add_extra_js_url(hass, _CARD_URL)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

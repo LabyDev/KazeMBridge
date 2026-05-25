@@ -15,6 +15,7 @@ import logging
 import uuid
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.data_entry_flow import AbortFlow
 from .api import MhiApi, CannotConnect
 from .const import DOMAIN, DEFAULT_DEVICE_ID
 
@@ -59,6 +60,8 @@ class KazemBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors["base"] = "register_failed"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
+            except AbortFlow:
+                raise
             except Exception:
                 _LOGGER.exception("Unexpected error during config flow")
                 errors["base"] = "unknown"

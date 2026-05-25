@@ -6,6 +6,7 @@ deviceId, operatorId and a Unix timestamp — even though command also appears i
 the URL path; the device rejects requests where the two don't match.
 """
 
+import json
 import time
 import aiohttp
 from .const import DEFAULT_DEVICE_ID, PORT
@@ -56,8 +57,11 @@ class MhiApi:
         url = f"https://{self._host}:{PORT}/beaver/command/{command}"
         try:
             async with self._session_().post(url, json=payload) as resp:
-                return await resp.json(content_type=None)
-        except aiohttp.ClientError as exc:
+                text = await resp.text()
+            if not text.strip():
+                return {}
+            return json.loads(text)
+        except (aiohttp.ClientError, json.JSONDecodeError) as exc:
             raise CannotConnect(str(exc)) from exc
 
     async def get_device_info(self) -> dict:

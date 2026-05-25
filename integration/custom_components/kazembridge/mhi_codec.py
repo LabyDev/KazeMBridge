@@ -91,6 +91,14 @@ def decode(b64: str) -> dict:
         elif code == 0x80 and sub == 0x10:
             outdoor_temp = OUTDOOR_TEMP[val]
 
+    err_byte = r[6]
+    if err_byte == 0:
+        error_code = None
+    elif err_byte & 0x80:
+        error_code = f"M{err_byte & 0x7F:02d}"
+    else:
+        error_code = f"E{err_byte:02d}"
+
     operation = bool(r[2] & 0x01)
     MODE_MAP = {0x00: 0, 0x08: 1, 0x10: 2, 0x0C: 3, 0x04: 4}
     mode = MODE_MAP.get(r[2] & 0x1C, 0)
@@ -113,6 +121,7 @@ def decode(b64: str) -> dict:
         "entrust": bool(r[12] & 0x04),
         "indoor_temp": indoor_temp,
         "outdoor_temp": outdoor_temp,
+        "error_code": error_code,
     }
 
 
@@ -146,18 +155,16 @@ def encode(operation: int, mode: int, temp: float,
     c[3] |= FAN_C[fan]
     if wind_ud == 0:
         c[2] |= 0xC0
-        c[3] |= 0x80
     else:
         c[2] |= 0x80
         c[3] |= {1: 0x80, 2: 0x90, 3: 0xA0, 4: 0xB0}[wind_ud]
     if wind_lr == 0:
         c[12] |= 0x03
-        c[11] |= 0x10
     else:
         c[12] |= 0x02
         c[11] |= {1: 0x10, 2: 0x11, 3: 0x12, 4: 0x13, 5: 0x14, 6: 0x15, 7: 0x16}[wind_lr]
-    # Entrust bits 2–3: 0x0C = ON, 0x08 = OFF
     c[12] |= 0x0C if entrust else 0x08
+    c[12] |= 0x80
     c[4] = int(tval / 0.5) + 128
 
     r = bytearray(18); r[5] = 0xFF; r[0] = model_type
