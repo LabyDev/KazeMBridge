@@ -6,6 +6,7 @@ setAirconStat. A coordinator refresh is requested immediately after so the UI
 updates without waiting for the next poll cycle.
 """
 
+import voluptuous as vol
 from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
@@ -14,14 +15,25 @@ from homeassistant.components.climate import (
 )
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, FAN_MODES, FAN_MODE_TO_INT, FAN_INT_TO_MODE, SWING_MODES, SWING_MODE_TO_INT, SWING_INT_TO_MODE, H_SWING_OPTIONS, H_SWING_TO_INT, H_SWING_INT_TO_OPT
 from .coordinator import MhiCoordinator
 from .mhi_codec import encode
+
+_SERVICE_SET_STATE = "set_state"
+_SET_STATE_SCHEMA = vol.Schema({
+    vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+    vol.Optional("hvac_mode"): cv.string,
+    vol.Optional("temperature"): vol.Coerce(float),
+    vol.Optional("fan_mode"): cv.string,
+    vol.Optional("swing_mode"): cv.string,
+    vol.Optional("swing_horizontal_mode"): cv.string,
+})
 
 _HA_TO_AC_MODE = {
     HVACMode.AUTO: 0,
@@ -37,7 +49,20 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: MhiCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    async_add_entities([MhiClimate(coordinator, entry)])
+    entity = MhiClimate(coordinator, entry)
+    async_add_entities([entity])
+    hass.data[DOMAIN][entry.entry_id]["climate_entity"] = entity
+
+    if not hass.services.has_service(DOMAIN, _SERVICE_SET_STATE):
+        async def _handle_set_state(call) -> None:
+            for eid in call.data.get(ATTR_ENTITY_ID, []):
+                for entry_data in hass.data.get(DOMAIN, {}).values():
+                    e = entry_data.get("climate_entity")
+                    if e and e.entity_id == eid:
+                        await e.async_set_full_state(call.data)
+                        break
+
+        hass.services.async_register(DOMAIN, _SERVICE_SET_STATE, _handle_set_state, schema=_SET_STATE_SCHEMA)
 
 
 class MhiClimate(CoordinatorEntity, ClimateEntity):
@@ -106,6 +131,26 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
     @property
     def preset_mode(self) -> str:
         return "3d_auto" if self.coordinator.data.get("entrust") else PRESET_NONE
+
+    async def async_set_full_state(self, data: dict) -> None:
+        overrides = {}
+        if "hvac_mode" in data:
+            hm = data["hvac_mode"]
+            if hm == HVACMode.OFF or hm == "off":
+                overrides["operation"] = 0
+            else:
+                overrides["operation"] = 1
+                overrides["mode"] = _HA_TO_AC_MODE.get(HVACMode(hm), 0)
+        if "temperature" in data:
+            overrides["temp"] = data["temperature"]
+        if "fan_mode" in data:
+            overrides["fan"] = FAN_MODE_TO_INT[data["fan_mode"]]
+        if "swing_mode" in data:
+            overrides["wind_ud"] = SWING_MODE_TO_INT[data["swing_mode"]]
+        if "swing_horizontal_mode" in data:
+            overrides["wind_lr"] = H_SWING_TO_INT[data["swing_horizontal_mode"]]
+        if overrides:
+            await self._send(**overrides)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         await self._send(entrust=1 if preset_mode == "3d_auto" else 0)

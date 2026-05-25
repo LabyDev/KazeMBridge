@@ -33,10 +33,7 @@ const MODE_COLORS = {
 const V_ANGLES = [12, 32, 55, 75];
 
 // Horizontal positions mapped to codec wind_lr values.
-// User positions: 0=Normal(1) 1=Both Left(2) 2=Left+Center(3) 3=Both Center(4)
-//                 4=Center+Right(5) 5=Both Right(6) 6=Wide Spread(7) 7=Converge(?) swing=0
-// Codec wind_lr 1-7, swing=0.
-// Values must match the select entity option strings defined in const.py H_SWING_OPTIONS.
+// louver angles: 0=straight ahead, negative=left, positive=right.
 const H_POSITIONS = [
   { value: 'normal',       label: 'Normal',      desc: 'Both forward',                      louver: [0,    0   ] },
   { value: 'both_left',    label: 'Both Left',   desc: 'Both sides left',                   louver: [-45, -45 ] },
@@ -57,18 +54,34 @@ const V_POSITIONS = [
   { value: '4',     label: 'Low',   angle: V_ANGLES[3] },
 ];
 
-// How long to show the loading indicator after a service call (ms).
-// MHI units take ~5 s to respond; coordinator refresh interval is 30 s.
-const PENDING_MS = 7000;
-
 class KazemBridgeCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
     this._hass = null;
     this._config = null;
-    // Optimistic state: set on user action, cleared when coordinator confirms.
-    this._pending = null;  // { field, value, until }
+    // Optimistic state: cleared when coordinator confirms all queued values.
+    this._pending = null;   // { changes: {field: value, ...}, until: timestamp }
+    this._queued = {};      // accumulated changes within the debounce window
+    this._debounceTimer = null;
+    this._pollInterval = null;
+    this._entrustDebounce = null;
+  }
+
+  connectedCallback() {
+    this._triggerPoll();
+    this._pollInterval = setInterval(() => this._triggerPoll(), 8000);
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._pollInterval);
+  }
+
+  _triggerPoll() {
+    if (this._hass && this._config) {
+      this._hass.callWS({ type: 'homeassistant/update_entity', entity_id: this._config.entity })
+        .catch(() => {});
+    }
   }
 
   setConfig(config) {
@@ -83,9 +96,17 @@ class KazemBridgeCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    // Clear pending state once coordinator has confirmed the change.
-    if (this._pending && Date.now() > this._pending.until) {
-      this._pending = null;
+    if (this._pending) {
+      const s = hass.states[this._config?.entity];
+      if (s) {
+        const allConfirmed = Object.entries(this._pending.changes).every(([f, v]) => {
+          const actual = f === 'hvac_mode' ? s.state : s.attributes[f];
+          return actual == v;
+        });
+        if (allConfirmed || Date.now() > this._pending.until) {
+          this._pending = null;
+        }
+      }
     }
     this._render();
   }
@@ -101,17 +122,16 @@ class KazemBridgeCard extends HTMLElement {
 
   _attr(key, fallback = null) {
     const s = this._state();
-    // Return pending optimistic value if still within the loading window.
-    if (this._pending && this._pending.field === key && Date.now() < this._pending.until) {
-      return this._pending.value;
+    if (this._pending?.changes[key] !== undefined && Date.now() < this._pending.until) {
+      return this._pending.changes[key];
     }
     return s ? (s.attributes[key] ?? fallback) : fallback;
   }
 
   _mode() {
     const s = this._state();
-    if (this._pending && this._pending.field === 'hvac_mode' && Date.now() < this._pending.until) {
-      return this._pending.value;
+    if (this._pending?.changes['hvac_mode'] !== undefined && Date.now() < this._pending.until) {
+      return this._pending.changes['hvac_mode'];
     }
     return s ? s.state : 'off';
   }
@@ -128,69 +148,162 @@ class KazemBridgeCard extends HTMLElement {
     return s ? parseFloat(s.state) : null;
   }
 
-  // ─── Service calls ────────────────────────────────────────────────────────
+  // ─── Action queue + debounce ──────────────────────────────────────────────
 
-  _call(service, data = {}, optimisticField = null, optimisticValue = null) {
-    this._hass.callService('climate', service, { entity_id: this._config.entity, ...data });
-    if (optimisticField !== null) {
-      this._pending = { field: optimisticField, value: optimisticValue, until: Date.now() + PENDING_MS };
-      // Trigger re-render immediately for optimistic UI, then again after pending clears.
-      this._render();
-      setTimeout(() => { this._pending = null; this._render(); }, PENDING_MS);
-    }
+  _queue(field, value) {
+    this._queued[field] = value;
+    if (!this._pending) this._pending = { changes: {}, until: Date.now() + 30000 };
+    this._pending.changes[field] = value;
+    this._pending.until = Date.now() + 30000;
+    this._render();
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = setTimeout(() => this._flush(), 600);
   }
 
+  _flush() {
+    const changes = { ...this._queued };
+    this._queued = {};
+    this._hass.callService('kazembridge', 'set_state', {
+      entity_id: this._config.entity,
+      ...changes,
+    });
+  }
+
+  // ─── Action methods ───────────────────────────────────────────────────────
+
   _setMode(mode) {
-    if (mode === 'off') {
-      this._call('turn_off', {}, 'hvac_mode', 'off');
-    } else {
-      this._call('set_hvac_mode', { hvac_mode: mode }, 'hvac_mode', mode);
-    }
+    this._queue('hvac_mode', mode);
   }
 
   _adjustTemp(delta) {
     const cur = this._attr('temperature', 22);
     const next = Math.max(16, Math.min(31, Math.round((cur + delta) * 2) / 2));
-    this._call('set_temperature', { temperature: next }, 'temperature', next);
+    this._queue('temperature', next);
   }
 
   _setFan(mode) {
-    this._call('set_fan_mode', { fan_mode: mode }, 'fan_mode', mode);
+    this._queue('fan_mode', mode);
   }
 
   _setSwing(mode) {
-    this._call('set_swing_mode', { swing_mode: mode }, 'swing_mode', mode);
+    this._queue('swing_mode', mode);
   }
 
   _setHSwing(value) {
-    this._call('set_swing_horizontal_mode', { swing_horizontal_mode: value }, 'h_swing', value);
+    this._queue('swing_horizontal_mode', value);
   }
 
   _toggleEntrust() {
     const cur = this._attr('preset_mode', 'none') === '3d_auto';
-    this._hass.callService('climate', 'set_preset_mode', {
-      entity_id: this._config.entity,
-      preset_mode: cur ? 'none' : '3d_auto',
-    });
-    this._pending = { field: 'entrust', value: !cur, until: Date.now() + PENDING_MS };
+    clearTimeout(this._entrustDebounce);
+    this._entrustDebounce = setTimeout(() => {
+      this._hass.callService('climate', 'set_preset_mode', {
+        entity_id: this._config.entity,
+        preset_mode: cur ? 'none' : '3d_auto',
+      });
+    }, 600);
+    // Optimistic: track entrust separately since it's not in the blob
+    if (!this._pending) this._pending = { changes: {}, until: Date.now() + 30000 };
+    this._pending.changes['preset_mode'] = cur ? 'none' : '3d_auto';
+    this._pending.until = Date.now() + 30000;
     this._render();
-    setTimeout(() => { this._pending = null; this._render(); }, PENDING_MS);
   }
 
   // ─── SVG helpers ──────────────────────────────────────────────────────────
 
   /**
-   * Side-profile AC unit with vertical vane.
-   * swingValue: 'swing' | '1' | '2' | '3' | '4'
+   * Front view of the AC unit — shows horizontal airflow direction.
+   * hSwingValue: one of H_POSITIONS[n].value
    */
-  _verticalVaneSvg(swingValue) {
-    const isSwing = swingValue === 'swing';
-    const W = 180, BH = 36, BY = 18;
-    const VX = 18, VY = BY + BH, VLEN = 48;
+  _frontViewSvg(hSwingValue) {
+    const W = 200, BH = 40, BY = 14;
+    const pos = H_POSITIONS.find(p => p.value === hSwingValue) || H_POSITIONS[0];
+    const isSwing = pos.louver === null;
 
-    const activeAngle = isSwing ? V_ANGLES[0] : (V_ANGLES[parseInt(swingValue, 10) - 1] ?? V_ANGLES[0]);
+    // Arrow helper: draws a dashed line + arrowhead from (ox,oy) at angle deg
+    // deg=0 means pointing right (out from front face = upward in this orientation)
+    // We rotate the whole group so 0deg = straight out from the front grille
+    const arrow = (cx, cy, deg, opacity = 1) => {
+      const len = 36;
+      const r = deg * Math.PI / 180;
+      // In front-view: straight out = upward = negative Y, left = negative X
+      // deg=0 → straight ahead (up), negative = left, positive = right
+      const ex = cx + len * Math.sin(r);
+      const ey = cy - len * Math.cos(r);  // subtract because SVG Y is inverted
+      const mx = cx + (len - 6) * Math.sin(r);
+      const my = cy - (len - 6) * Math.cos(r);
+      const lx = mx - 7 * Math.cos(r - 0.4), ly = my - 7 * (-Math.sin(r - 0.4));
+      const rx = mx - 7 * Math.cos(r + 0.4), ry = my - 7 * (-Math.sin(r + 0.4));
+      return `
+        <g opacity="${opacity}">
+          <line x1="${cx}" y1="${cy}" x2="${(ex - 5 * Math.sin(r)).toFixed(1)}" y2="${(ey + 5 * Math.cos(r)).toFixed(1)}"
+            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <path d="M${lx.toFixed(1)},${ly.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)} L${rx.toFixed(1)},${ry.toFixed(1)}"
+            fill="#4fc3f7"/>
+        </g>`;
+    };
 
-    // Build vane line endpoint for a given angle
+    const cx1 = W / 2 - 28, cx2 = W / 2 + 28;
+    const arrowY = BY + BH + 6;
+
+    let arrowContent;
+    if (isSwing) {
+      // Animate both arrows sweeping left↔right
+      const swingDegs = [-60, -30, 0, 30, 60, 30, 0, -30, -60];
+      const vals1 = swingDegs.map(d => d).join(';');
+      const vals2 = swingDegs.map(d => d).join(';');
+      const kts = swingDegs.map((_, i) => (i / (swingDegs.length - 1)).toFixed(3)).join(';');
+      arrowContent = `
+        <g id="arr1" opacity="0.85">
+          <line x1="${cx1}" y1="${arrowY}" x2="${cx1}" y2="${arrowY - 30}"
+            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3">
+            <animateTransform attributeName="transform" type="rotate"
+              values="${swingDegs.map(d => `${d} ${cx1} ${arrowY}`).join(';')}"
+              keyTimes="${kts}" dur="2.5s" repeatCount="indefinite" calcMode="spline"
+              keySplines="${swingDegs.slice(0,-1).map(()=>'0.4 0 0.6 1').join(';')}"/>
+          </line>
+        </g>
+        <g id="arr2" opacity="0.85">
+          <line x1="${cx2}" y1="${arrowY}" x2="${cx2}" y2="${arrowY - 30}"
+            stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3">
+            <animateTransform attributeName="transform" type="rotate"
+              values="${swingDegs.map(d => `${-d} ${cx2} ${arrowY}`).join(';')}"
+              keyTimes="${kts}" dur="2.5s" repeatCount="indefinite" calcMode="spline"
+              keySplines="${swingDegs.slice(0,-1).map(()=>'0.4 0 0.6 1').join(';')}"/>
+          </line>
+        </g>`;
+    } else {
+      arrowContent = arrow(cx1, arrowY, pos.louver[0], 0.85) + arrow(cx2, arrowY, pos.louver[1], 0.85);
+    }
+
+    return `<svg viewBox="0 0 ${W} 110" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
+      <!-- AC front face -->
+      <rect x="0" y="${BY}" width="${W}" height="${BH}" rx="7" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
+      <line x1="16" y1="${BY + 10}" x2="${W - 16}" y2="${BY + 10}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="16" y1="${BY + 20}" x2="${W - 16}" y2="${BY + 20}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="16" y1="${BY + 30}" x2="${W - 16}" y2="${BY + 30}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <circle cx="${W - 14}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
+      <!-- Airflow arrows -->
+      ${arrowContent}
+    </svg>`;
+  }
+
+  /**
+   * Side view of the AC unit — shows vertical vane angle.
+   * vSwingValue: 'swing' | '1' | '2' | '3' | '4'
+   */
+  _sideViewSvg(vSwingValue) {
+    const isSwing = vSwingValue === 'swing';
+    // Body dimensions (side profile — narrower rect)
+    const BW = 60, BH = 30, BX = 10, BY = 18;
+    // Vane pivot at front-bottom of body
+    const VX = BX + BW, VY = BY + BH;
+    const VLEN = 50;
+
+    const activeAngle = isSwing
+      ? V_ANGLES[0]
+      : (V_ANGLES[parseInt(vSwingValue, 10) - 1] ?? V_ANGLES[0]);
+
     const ep = deg => {
       const r = deg * Math.PI / 180;
       return [VX + VLEN * Math.cos(r), VY + VLEN * Math.sin(r)];
@@ -198,17 +311,14 @@ class KazemBridgeCard extends HTMLElement {
 
     const [vx2, vy2] = ep(activeAngle);
 
-    // For swing: animate the vane through all 4 positions + back
     const swingValues = [...V_ANGLES, ...V_ANGLES.slice(0, -1).reverse()];
     const rotatePath = swingValues.map(a => `${a} ${VX},${VY}`).join(';');
     const keyTimes = swingValues.map((_, i) => (i / (swingValues.length - 1)).toFixed(3)).join(';');
 
-    // Airflow arrow (inline path, no marker dependency)
     const arrowSvg = (deg, opacity = 1) => {
       const r = deg * Math.PI / 180;
       const x1 = VX + 12 * Math.cos(r), y1 = VY + 12 * Math.sin(r);
       const x2 = VX + (VLEN + 18) * Math.cos(r), y2 = VY + (VLEN + 18) * Math.sin(r);
-      // Arrowhead as a small rotated triangle path
       const tip = [x2, y2];
       const left = [x2 - 7 * Math.cos(r - 0.4), y2 - 7 * Math.sin(r - 0.4)];
       const right = [x2 - 7 * Math.cos(r + 0.4), y2 - 7 * Math.sin(r + 0.4)];
@@ -233,61 +343,14 @@ class KazemBridgeCard extends HTMLElement {
           stroke="#aaa" stroke-width="5" stroke-linecap="round"/>
         ${arrowSvg(activeAngle, 0.75)}`;
 
-    return `<svg viewBox="0 0 ${W} 110" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
-      <!-- AC body -->
-      <rect x="0" y="${BY}" width="${W}" height="${BH}" rx="7" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
-      <line x1="16" y1="${BY + 9}" x2="${W - 16}" y2="${BY + 9}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="16" y1="${BY + 18}" x2="${W - 16}" y2="${BY + 18}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="16" y1="${BY + 27}" x2="${W - 16}" y2="${BY + 27}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <circle cx="${W - 14}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
+    return `<svg viewBox="0 0 200 110" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
+      <!-- AC side profile body -->
+      <rect x="${BX}" y="${BY}" width="${BW}" height="${BH}" rx="5" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
+      <!-- Front face indicator line -->
+      <line x1="${BX + BW}" y1="${BY}" x2="${BX + BW}" y2="${BY + BH}" stroke="#4a4a5a" stroke-width="2"/>
+      <circle cx="${BX + 12}" cy="${BY + 9}" r="4" fill="${this._isOn() ? '#4caf50' : '#444'}" opacity="0.9"/>
       <!-- Vane -->
       ${vaneContent}
-    </svg>`;
-  }
-
-  /**
-   * Top-down view of two horizontal louvers for a given position.
-   * Returns an SVG string showing where each louver points.
-   *
-   * Each louver is drawn as a short bar from center-ish with an angle.
-   * Angle 0 = straight ahead, negative = left, positive = right.
-   *
-   * Positions (codec wind_lr 1-7):
-   *   1=Normal(both 0°), 2=Both Left(-45°,-45°), 3=Left+Center(-45°,0°),
-   *   4=Both Center(0°,0°), 5=Center+Right(0°,+45°), 6=Both Right(+45°,+45°),
-   *   7=Wide(-60°,+60°)
-   */
-  _hLouverSvg(angles, active = false) {
-    const color = active ? '#4fc3f7' : '#666';
-    const W = 36, H = 36, CX = W / 2, CY = H / 2;
-    const LEN = 10; // half-length of each louver bar
-
-    if (!angles) {
-      // Swing: show arrows cycling with ↔ symbol
-      return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-        <text x="${CX}" y="${CY + 5}" text-anchor="middle" font-size="16" fill="${color}">↔</text>
-      </svg>`;
-    }
-
-    const louver = (cx, deg) => {
-      const r = deg * Math.PI / 180;
-      const dx = LEN * Math.sin(r), dy = LEN * Math.cos(r);
-      // Arrow tip
-      const tx = cx + dx, ty = CY - dy;
-      const bx = cx - dx, by = CY + dy;
-      // Arrowhead direction (pointing forward = upward in top-down view)
-      const ax = tx - 5 * Math.sin(r - 0.35), ay = ty + 5 * Math.cos(r - 0.35);
-      const bax = tx - 5 * Math.sin(r + 0.35), bay = ty + 5 * Math.cos(r + 0.35);
-      return `
-        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}"
-          stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M${ax.toFixed(1)},${ay.toFixed(1)} L${tx.toFixed(1)},${ty.toFixed(1)} L${bax.toFixed(1)},${bay.toFixed(1)}"
-          fill="${color}"/>`;
-    };
-
-    return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-      ${louver(CX - 9, angles[0])}
-      ${louver(CX + 9, angles[1])}
     </svg>`;
   }
 
@@ -345,6 +408,37 @@ class KazemBridgeCard extends HTMLElement {
       </button>`).join('');
   }
 
+  _hLouverSvg(angles, active = false) {
+    const color = active ? '#4fc3f7' : '#666';
+    const W = 36, H = 36, CX = W / 2, CY = H / 2;
+    const LEN = 10;
+
+    if (!angles) {
+      return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+        <text x="${CX}" y="${CY + 5}" text-anchor="middle" font-size="16" fill="${color}">↔</text>
+      </svg>`;
+    }
+
+    const louver = (cx, deg) => {
+      const r = deg * Math.PI / 180;
+      const dx = LEN * Math.sin(r), dy = LEN * Math.cos(r);
+      const tx = cx + dx, ty = CY - dy;
+      const bx = cx - dx, by = CY + dy;
+      const ax = tx - 5 * Math.sin(r - 0.35), ay = ty + 5 * Math.cos(r - 0.35);
+      const bax = tx - 5 * Math.sin(r + 0.35), bay = ty + 5 * Math.cos(r + 0.35);
+      return `
+        <line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}"
+          stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M${ax.toFixed(1)},${ay.toFixed(1)} L${tx.toFixed(1)},${ty.toFixed(1)} L${bax.toFixed(1)},${bay.toFixed(1)}"
+          fill="${color}"/>`;
+    };
+
+    return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+      ${louver(CX - 9, angles[0])}
+      ${louver(CX + 9, angles[1])}
+    </svg>`;
+  }
+
   // ─── Main render ──────────────────────────────────────────────────────────
 
   _render() {
@@ -366,8 +460,7 @@ class KazemBridgeCard extends HTMLElement {
     const indoorT    = this._sensorValue(this._config.indoor_sensor);
     const outdoorT   = this._sensorValue(this._config.outdoor_sensor);
     const pending    = this._isPending();
-
-    const hSwing = this._attr('swing_horizontal_mode', 'normal');
+    const hSwing     = this._attr('swing_horizontal_mode', 'normal');
 
     const css = `
       :host { display: block; }
@@ -424,7 +517,9 @@ class KazemBridgeCard extends HTMLElement {
       .temp-btn:active { background: #3a3a4a; }
       .temp-value { font-size: 42px; font-weight: 300; color: ${accent}; line-height: 1; text-align: center; }
       .temp-unit { font-size: 13px; color: #555; text-align: center; }
-      .vane-area { display: flex; justify-content: center; margin-bottom: 12px; }
+      .vane-panels { display: flex; gap: 10px; margin-bottom: 12px; }
+      .vane-panel { flex: 1; display: flex; flex-direction: column; align-items: center; }
+      .vane-panel .section-label { margin-bottom: 4px; }
       .vane-row { display: flex; gap: 5px; margin-bottom: 14px; flex-wrap: wrap; }
       .vane-btn {
         flex: 1; min-width: 36px;
@@ -484,7 +579,16 @@ class KazemBridgeCard extends HTMLElement {
             <button class="temp-btn" id="tp">+</button>
           </div>
 
-          <div class="vane-area">${this._verticalVaneSvg(swingMode)}</div>
+          <div class="vane-panels">
+            <div class="vane-panel">
+              <div class="section-label">Front view</div>
+              ${this._frontViewSvg(hSwing)}
+            </div>
+            <div class="vane-panel">
+              <div class="section-label">Side view</div>
+              ${this._sideViewSvg(swingMode)}
+            </div>
+          </div>
 
           <div class="section-label">Vertical vane</div>
           <div class="vane-row">${this._verticalVaneButtons(swingMode)}</div>
