@@ -9,5 +9,6 @@
   "requirements": [],
   "dependencies": ["zeroconf"],
   "homeassistant": "2024.1.0",
-  "zeroconf": [{"type": "_beaver._tcp.local."}]
+  "zeroconf": [{"type": "_beaver._tcp.local."}],
+  "license": "GPL-3.0-or-later"
 }

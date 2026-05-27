@@ -21,7 +21,6 @@ import logging
 import uuid
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.components.zeroconf import ZeroconfServiceInfo
 from homeassistant.data_entry_flow import AbortFlow
 from .api import MhiApi, CannotConnect
 from .const import DOMAIN, DEFAULT_DEVICE_ID
@@ -40,7 +39,7 @@ class KazemBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # async_step_user uses it to pre-fill the host field.
         self._discovered_host: str | None = None
 
-    async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo):
+    async def async_step_zeroconf(self, discovery_info):
         """Called by HA when it spots a _beaver._tcp.local. mDNS advertisement.
 
         The service name published by the adapter follows the pattern
@@ -58,6 +57,7 @@ class KazemBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
         self._discovered_host = discovery_info.host
+        self._async_abort_entries_match({"host": discovery_info.host})
         # Surface the discovered host in the HA notification title.
         self.context["title_placeholders"] = {"host": discovery_info.host}
         return await self.async_step_user()

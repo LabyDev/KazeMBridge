@@ -4,6 +4,7 @@ Home Assistant custom integration for **Mitsubishi Heavy Industries ACs** with t
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![GitHub release](https://img.shields.io/github/v/release/LabyDev/KazeMBridge)](https://github.com/LabyDev/KazeMBridge/releases)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-aperturecoffee-FFDD00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/aperturecoffee)
 
 ---
 
@@ -127,6 +128,16 @@ Decodes a sample blob and shows a round-trip encode→decode result. Useful for 
 ## How it works
 
 The WF-RAC adapter exposes a local HTTPS API on port 51443. All AC state is packed into a binary blob (`airconStat`) encoded as base64. The integration decodes this blob to read state and re-encodes it to send commands. See [`research/research.md`](research/research.md) for the full API and encoding documentation.
+
+---
+
+## License & legal
+
+This project is licensed under the **GNU General Public License v3.0 or later**, see [`LICENSE`](LICENSE).
+
+The MHI WF-RAC binary protocol documented in [`research/research.md`](research/research.md) was obtained through reverse engineering for the sole purpose of achieving interoperability with third-party software (Home Assistant). [EU Directive 2009/24/EC, Article 6](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32009L0024#d1e530-23-1) permits decompilation and reverse engineering under these conditions; contractual provisions that purport to restrict this exception are unenforceable under EU law. The Netherlands implements this in the [*Auteurswet*, Article 45m](https://wetten.overheid.nl/BWBR0001886/#Artikel45m).
+
+Mitsubishi Heavy Industries retains all rights to their firmware, protocol, and trademarks. This project is not affiliated with or endorsed by MHI.
 
 ---
 

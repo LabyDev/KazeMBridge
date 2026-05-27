@@ -210,6 +210,7 @@ class KazemBridgeCard extends HTMLElement {
     this._hTargets = null;
     this._rafId = null;
     this._lastRafTs = null;
+    this._renderPending = false;
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -443,8 +444,10 @@ class KazemBridgeCard extends HTMLElement {
     if (!this._pending)
       this._pending = { changes: {}, until: Date.now() + 30000 };
     this._pending.changes[field] = value;
-    this._pending.until = Date.now() + 30000;
-    this._render();
+    if (!this._renderPending) {
+      this._renderPending = true;
+      requestAnimationFrame(() => { this._renderPending = false; this._render(); });
+    }
     clearTimeout(this._debounceTimer);
     this._debounceTimer = setTimeout(() => this._flush(), 600);
   }
@@ -452,6 +455,7 @@ class KazemBridgeCard extends HTMLElement {
   _flush() {
     const changes = { ...this._queued };
     this._queued = {};
+    this._pending = { changes, until: Date.now() + 8000 };
     this._hass.callService("kazembridge", "set_state", {
       entity_id: this._config.entity,
       ...changes,
