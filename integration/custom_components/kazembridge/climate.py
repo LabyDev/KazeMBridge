@@ -180,6 +180,7 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
             "wind_ud": d["wind_ud"],
             "wind_lr": d["wind_lr"],
             "entrust": 1 if d.get("entrust") else 0,
+            "model_type": d.get("model_type", 0),
         }
 
     async def _send(self, **overrides) -> None:
@@ -190,6 +191,11 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
         _LOGGER.debug("_send blob: %s", b64)
         resp = await self.coordinator.api.set_aircon_stat(self._aircon_id, b64)
         result = resp.get("result", -1) if resp else -1
+        if result == 1:
+            import asyncio
+            await asyncio.sleep(2)
+            resp = await self.coordinator.api.set_aircon_stat(self._aircon_id, b64)
+            result = resp.get("result", -1) if resp else -1
         _LOGGER.debug("_send result: %s (full response: %s)", result, resp)
         if result != 0:
             raise HomeAssistantError(f"AC rejected command (result={result})")

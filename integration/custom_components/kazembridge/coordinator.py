@@ -5,6 +5,7 @@ All entity platforms share this single coordinator so only one HTTP request is
 made per poll cycle regardless of how many entities are registered.
 """
 
+import asyncio
 import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -33,6 +34,12 @@ class MhiCoordinator(DataUpdateCoordinator):
             resp = await self.api.get_aircon_stat(self.aircon_id)
         except CannotConnect as exc:
             raise UpdateFailed(exc) from exc
+        if resp.get("result") == 1:
+            await asyncio.sleep(2)
+            try:
+                resp = await self.api.get_aircon_stat(self.aircon_id)
+            except CannotConnect as exc:
+                raise UpdateFailed(exc) from exc
         if resp.get("result") != 0:
             raise UpdateFailed(f"getAirconStat result={resp.get('result')}")
         contents = resp["contents"]
