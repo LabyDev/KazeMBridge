@@ -615,7 +615,7 @@ Initialised from `command_init = {0,0,0,0,0,255,0,0,0,0,0,0,0,0,0,0,0,0}` — by
 | `0x0A` | Speed 3 | `af_p_03` |
 | `0x0E` | Speed 4 | `af_p_04` |
 
-**Vertical position (high nibble, bits 4–7)** — from `lv_p_*` arrays, only written when swing is OFF:
+**Vertical position (high nibble, bits 4–7)** — from `lv_p_*` arrays:
 
 | Value  | Position   | Source    |
 | ------ | ---------- | --------- |
@@ -624,7 +624,7 @@ Initialised from `command_init = {0,0,0,0,0,255,0,0,0,0,0,0,0,0,0,0,0,0}` — by
 | `0xA0` | Position 3 | `lv_p_03` |
 | `0xB0` | Position 4 | `lv_p_04` |
 
-> When swing is ON, `lv_p_01` (0x80) is still ORed in but has no effect since `as_p_on` already sets bits 6–7.
+> When swing is ON, `lv_p_01` (`0x80`) is still ORed into byte 3 immediately after `as_p_on`. This is confirmed by `AirconStatCoder.smali` — the encoder always writes Pos1 alongside the swing-ON flag. Omitting it causes result=12.
 
 #### Byte 4 — Temperature
 
@@ -656,16 +656,16 @@ From `COMMAND_VACANT_PROPERTY_ON` and `COMMAND_SELF_CLEAN_RESET_ON`:
 
 #### Byte 11 — Horizontal position
 
-From `lh_p_*` arrays:
+From `lh_p_*` arrays. Always write a position — `lh_p_01` (`0x10`) is written alongside `av_p_on` (h-swing ON) by `commandToByte`. Omitting it causes result=12.
 
-| Value  | Position   | Description                       |
-| ------ | ---------- | --------------------------------- |
-| `0x10` | Position 1 | Normal — both louvers forward     |
-| `0x11` | Position 2 | Both left                         |
-| `0x12` | Position 3 | Left stays left, right goes center|
-| `0x13` | Position 4 | Both center                       |
-| `0x14` | Position 5 | Left goes center, right goes right|
-| `0x15` | Position 6 | Both right                        |
+| Value  | Position   | Description                        |
+| ------ | ---------- | ---------------------------------- |
+| `0x10` | Position 1 | Normal — both louvers forward      |
+| `0x11` | Position 2 | Both left                          |
+| `0x12` | Position 3 | Left stays left, right goes center |
+| `0x13` | Position 4 | Both center                        |
+| `0x14` | Position 5 | Left goes center, right goes right |
+| `0x15` | Position 6 | Both right                         |
 | `0x16` | Position 7 | Wide spread — left left, right right|
 
 #### Byte 12 — Horizontal swing + entrust + self-clean op
@@ -825,6 +825,8 @@ From `STATUS_OPERATION_MODE2_ON/OFF`:
 
 **Horizontal swing is model-gated** — `windDirectionLR` is only encoded if `enabledWindDirectionLR()` is true. Otherwise position 1 with swing off is always written.
 
+**Position always required** — byte 3 (vertical position) and byte 11 (horizontal position) must always contain a valid position value, even when swing is ON. When activating swing, write Pos1 as the baseline (`0x80` for byte 3, `0x10` for byte 11). The smali confirms `lv_p_01` and `lh_p_01` are applied alongside `as_p_on`/`av_p_on`.
+
 **Entrust is model-gated** — only encoded if `enableEntrust()` is true.
 
 **Vacant property is model-gated** — only encoded if `enableVacantProperty()` is true.
@@ -953,7 +955,7 @@ Summary of what the KazeMBridge HA integration reads and writes from the local A
 | `windDirectionUD` (vertical vane) | ✅ | ✅ | Swing + positions 1–4 via climate swing_mode |
 | `windDirectionLR` (horizontal vane) | ✅ | ✅ | Swing + positions 1–7 via select entity |
 | `entrust` (3D Auto) | ✅ | ✅ | Via climate preset_mode |
-| `model_type` | ✅ | ✅ | Read from blob byte 0, echoed back in every write |
+| `model_type` | ✅ | ✅ | Read from receive half `r[0] & 0x7F`; echoed into `r[0]` of every encoded blob. `c[0]` always stays `0x00`. |
 | `indoorTemp` | ✅ | — | Sensor entity + climate attribute |
 | `outdoorTemp` | ✅ | — | Sensor entity + climate attribute |
 | `ledStat` | ✅ | — | Climate extra attribute (settable via cloud setOptionSetting only) |

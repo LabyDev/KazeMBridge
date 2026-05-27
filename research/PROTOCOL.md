@@ -52,20 +52,20 @@ All field masks are OR'd onto this base.
 | 2    | Mode                | `0x20`=Auto, `0x28`=Cool, `0x30`=Heat, `0x2C`=Fan, `0x24`=Dry                                                                 |
 | 2    | Vertical swing      | `0xC0`=ON (swing active), `0x80`=OFF (position mode)                                                                          |
 | 3    | Fan speed           | `0x0F`=Auto, `0x08`=Spd1, `0x09`=Spd2, `0x0A`=Spd3, `0x0E`=Spd4                                                               |
-| 3    | Vertical position   | `0x80`=Pos1, `0x90`=Pos2, `0xA0`=Pos3, `0xB0`=Pos4 — **only when swing OFF**                                                  |
-| 4    | Temperature         | `int(temp_°C / 0.5) + 128` — range 16-31°C in 0.5° steps                                                                      |
-| 5    | Always              | `0xFF` (from init)                                                                                                            |
-| 9    | Preset temp auto    | `0x01`=ON, `0x00`=OFF (only FDT2023)                                                                                          |
-| 10   | Vacant property     | `0x01`=ON (only Global2022, ZT2025)                                                                                           |
-| 10   | Self-clean reset    | `0x04`=ON (only Global2022, HighEnd2023, ZT2025)                                                                              |
-| 11   | Horizontal position | `0x10`=Pos1(Normal), `0x11`=Pos2, `0x12`=Pos3, `0x13`=Pos4, `0x14`=Pos5, `0x15`=Pos6, `0x16`=Pos7 — **only when h-swing OFF** |
-| 12   | Horizontal swing    | `0x03`=ON (swing active), `0x02`=OFF (position mode)                                                                          |
-| 12   | Entrust / 3D Auto   | `0x0C`=ON, `0x08`=OFF                                                                                                         |
-| 12   | Self-clean op       | **Always OR `0x80`** (OFF state). `0x90`=ON (only Global2022, HighEnd2023, ZT2025)                                            |
+| 3    | Vertical position   | `0x80`=Pos1, `0x90`=Pos2, `0xA0`=Pos3, `0xB0`=Pos4 — **always write a position, even during swing** (use `0x80` when swing ON) |
+| 4    | Temperature         | `int(temp_°C / 0.5) + 128` — range 16-31°C in 0.5° steps                                                                       |
+| 5    | Always              | `0xFF` (from init)                                                                                                               |
+| 9    | Preset temp auto    | `0x01`=ON, `0x00`=OFF (only FDT2023)                                                                                             |
+| 10   | Vacant property     | `0x01`=ON (only Global2022, ZT2025)                                                                                              |
+| 10   | Self-clean reset    | `0x04`=ON (only Global2022, HighEnd2023, ZT2025)                                                                                 |
+| 11   | Horizontal position | `0x10`=Pos1(Normal), `0x11`=Pos2, `0x12`=Pos3, `0x13`=Pos4, `0x14`=Pos5, `0x15`=Pos6, `0x16`=Pos7 — **always write a position, even during h-swing** (use `0x10` when swing ON) |
+| 12   | Horizontal swing    | `0x03`=ON (swing active), `0x02`=OFF (position mode)                                                                            |
+| 12   | Entrust / 3D Auto   | `0x0C`=ON, `0x08`=OFF                                                                                                           |
+| 12   | Self-clean op       | **Always OR `0x80`** (OFF state). `0x90`=ON (only Global2022, HighEnd2023, ZT2025)                                              |
 
 > **Critical:** byte 12 bit 7 (`0x80`) must ALWAYS be set (it is the "self-clean OFF" pattern). Omitting it causes the AC to return result=12 (abnormal state).
 >
-> **Critical:** Do NOT set vertical position bits in byte 3 when vertical swing is ON. Do NOT set byte 11 when horizontal swing is ON.
+> **Critical:** Always write a position value in byte 3 (vertical) and byte 11 (horizontal), even when swing is ON. When activating swing, write Pos1 (`0x80` for byte 3, `0x10` for byte 11). Confirmed by `AirconStatCoder.smali`: `commandToByte` always applies `lv_p_01` after `as_p_on`, and `lh_p_01` after `av_p_on`.
 
 ---
 
@@ -136,11 +136,11 @@ model_type = receive_byte_0 & 0x7F
 
 ### Command half (encode)
 
-> **Critical:** byte 0 of the **command half** must always be `0x00`. Do NOT write model type into it. The device rejects commands where byte 0 ≠ 0x00 with result=12.
+> **Critical:** byte 0 of the **command half** must always be `0x00`. Do NOT write model type into it. The device rejects commands where command byte 0 ≠ 0x00 with result=12.
 >
-> **Critical:** byte 0 of the **receive half** you encode must also be `0x00`. The app re-encodes the receive half from scratch using `receive_init` (all zeros except byte 5=`0xFF`) — it does not echo the raw byte 0 from `getAirconStat`.
-
-The model type value is used only to determine which optional features are available (self-clean, vacant property, etc.). It is never written to the outgoing blob.
+> **Receive half byte 0:** write the model type value here (e.g. `0x01` for Global 2022). Confirmed by `AirconStatCoder.smali`: `receiveToByte` starts from `receive_init` (all zeros) and ORs the model type constant into byte 0. For Separate 2021 (0x00) this is a no-op — which is why it was previously undocumented. For other models it must be set, or the AC returns result=12.
+>
+> When decoding, the device sets bit 7 of receive byte 0 as a device flag (`0x81` = Global 2022 with flag set). Always mask with `& 0x7F` to get the model type, and write only the masked value (not the raw byte) into the encode receive half.
 
 ### Feature availability by model
 
@@ -226,27 +226,24 @@ The remote control's blob has byte 12=`0x00` because it uses a different interna
 
 **Fix:** Added `c[12] |= 0x80`.
 
-#### Bug 2 — Position bits set during swing
-When vertical swing was ON (`wind_ud=0`), `c[3] |= 0x80` was also set, which is a vane position bit. The protocol states position bits must only be set when swing is OFF.
+#### Bug 2 — Position bits NOT written during swing (overcorrection)
+An earlier version set position bits in `c[3]` and `c[11]` during swing, which was wrong. They were removed entirely. This was an overcorrection.
 
-Same issue for horizontal: when h-swing was ON (`wind_lr=0`), `c[11] |= 0x10` was set.
+**What the smali actually requires:** `commandToByte` always applies `lv_p_01` (`0x80`) to `c[3]` immediately after writing `as_p_on` (vertical swing ON), and `lh_p_01` (`0x10`) to `c[11]` immediately after writing `av_p_on` (horizontal swing ON). Position Pos1 must always be written — even during swing. When swing is OFF a specific position is written; when swing is ON Pos1 is the baseline.
 
-**Fix:** Removed the erroneous OR operations.
+**Fix:** `c[3] |= 0x80` when `wind_ud == 0`; `c[11] |= 0x10` when `wind_lr == 0`.
 
-#### Bug 3 — Model type written to byte 0 of both halves (primary cause of result=12)
-`c[0] = model_type` and `r[0] = model_type` were set, sending the decoded receive-half model type (e.g. `0x81`) into the outgoing blob.
+#### Bug 3 — Model type not written to receive half byte 0
+`r[0]` was left at `0x00` (from `receive_init`). For Separate 2021 (model_type=0x00) this is correct. For Global 2022 and other models, `receiveToByte` ORs the model type constant into `r[0]`, so it must be `0x01`, `0x02`, etc.
 
-**Why this was wrong:** Confirmed by reading `AirconStatCoder.smali` (decompiled SmartM-Air APK):
-- `commandToByte()` starts from `command_init` (byte 0 = `0x00`) and never writes byte 0.
-- `receiveToByte()` starts from `receive_init` (byte 0 = `0x00`) and never writes byte 0.
-- Byte 0 of the receive half reported by `getAirconStat` has bit 7 set as a device flag (`0x81` = Global 2022 with flag). The app strips it with `& 0x7F` to get the model ID, but never writes it back.
+**Why this matters:** The device's own `getAirconStat` blob has bit 7 set in receive byte 0 as a device flag (e.g. `0x81` for Global 2022). The app strips this with `& 0x7F` to get model ID `0x01`, then writes `0x01` into the encode receive half. Sending `0x00` when the AC is Global 2022 caused result=12 for swing commands.
 
-Sending `0x81` at command byte 0 caused the device to return result=12 even when all other bytes were correct. This was the bug that survived after Bug 1 and Bug 2 were fixed.
+**Note on command byte 0:** `commandToByte` never writes byte 0 — `c[0]` stays `0x00` regardless of model. An even earlier bug wrote the raw `0x81` device flag into `c[0]`, which also caused result=12.
 
-**Fix:** Removed `c[0]` and `r[0]` assignments entirely. Both stay `0x00`. Removed `model_type` parameter from `encode()`. Fixed `decode()` to return `r[0] & 0x7F`.
+**Fix:** Added `model_type` param to `encode()`. Set `r[0] = model_type` (the masked value, not the raw device byte). `c[0]` stays `0x00`. Read `model_type` from coordinator data (`r[0] & 0x7F` from decoded blob) and pass it through `_params()` → `encode()`.
 
-### How it was debugged
-1. Confirmed `c[12] |= 0x80` was deployed — still got result=12.
-2. Sent the device's own unmodified blob back via curl — also got result=12 (expected: its command byte 12 = `0x00`).
-3. Read `AirconStatCoder.smali` → found `commandToByte` never writes byte 0, `byteToStat` applies `& 0x7F` mask to received byte 0.
-4. Fixed byte 0, tested via curl → result=0, AC turned on.
+### How it was debugged (2026-05-27)
+1. Decoded AC blobs captured from physical remote: `r[0]=0x81` → model_type=0x01 (Global 2022).
+2. Traced `AirconStatCoder.smali`: `commandToByte` never writes byte 0; `receiveToByte` ORs `STATUS_MODEL_NO_TYPE_*` into byte 0.
+3. Found swing still fails: smali shows `lv_p_01` and `lh_p_01` are always applied alongside swing-ON bits.
+4. Fixed `r[0] = model_type` and position-during-swing in `encode()`.
