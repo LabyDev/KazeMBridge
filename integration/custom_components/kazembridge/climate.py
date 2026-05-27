@@ -162,12 +162,18 @@ class MhiClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        d = self.coordinator.data
+        data = self.coordinator.data
         return {
-            "indoor_temp": d.get("indoor_temp"),
-            "outdoor_temp": d.get("outdoor_temp"),
-            "model_type": d.get("model_type"),
-            "error_code": d.get("error_code"),
+            "indoor_temp": data.get("indoor_temp"),
+            "outdoor_temp": data.get("outdoor_temp"),
+            "model_type": data.get("model_type"),
+            "error_code": data.get("error_code"),
+            # Read-only fields from the JSON response (not from the blob).
+            # auto_heating = 1 means frost-protection mode is active.
+            # led_stat and num_of_account are informational only.
+            "auto_heating": data.get("auto_heating"),
+            "led_stat": data.get("led_stat"),
+            "num_of_account": data.get("num_of_account"),
         }
 
     def _params(self) -> dict:

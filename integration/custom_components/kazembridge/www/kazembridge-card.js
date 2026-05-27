@@ -1,18 +1,80 @@
 /**
  * kazembridge-card — Lovelace custom card for MHI WF-RAC air conditioners.
  *
- * Served automatically by the KazeMBridge integration at /kazembridge_static/kazembridge-card.js.
- * No manual installation needed — the integration registers it via add_extra_js_url.
+ * Served automatically by the KazeMBridge integration at
+ * /kazembridge_static/kazembridge-card.js — no manual installation needed.
+ * The integration registers it via add_extra_js_url on startup.
  *
- * Card config:
+ * Card config example:
  *   type: custom:kazembridge-card
  *   entity: climate.mhi_ac
- *   indoor_sensor: sensor.mhi_ac_indoor_temperature   # optional
- *   outdoor_sensor: sensor.mhi_ac_outdoor_temperature # optional
+ *   indoor_sensor:  sensor.mhi_ac_indoor_temperature    # optional
+ *   outdoor_sensor: sensor.mhi_ac_outdoor_temperature   # optional
  */
 
+"use strict";
+
+// ─── Internationalisation ─────────────────────────────────────────────────────
+// The card reads hass.language and falls back to English when a key is missing.
+// Add a new language block here to support additional locales.
+const STRINGS = {
+  en: {
+    mode: "Mode",
+    vertical_vane: "Vertical vane",
+    horizontal_vane: "Horizontal vane",
+    fan_speed: "Fan speed",
+    front_view: "Front view",
+    side_view: "Side view",
+    presets: "Presets",
+    preset_name_ph: "Name…",
+    preset_save: "+ Save",
+    preset_confirm: "Save",
+    preset_cancel: "Cancel",
+    preset_this_ac: "This AC",
+    preset_global: "Global",
+    indoor: "Indoor",
+    outdoor: "Outdoor",
+    frost_protection: "Frost Protection",
+    entrust_3d_auto: "3D Auto",
+    turn_off: "Turn off",
+    turn_on: "Turn on",
+    updating: "Updating…",
+    fan_auto: "A",
+    swing: "Swing",
+    global_badge: "G",
+  },
+  nl: {
+    mode: "Modus",
+    vertical_vane: "Verticale lamellen",
+    horizontal_vane: "Horizontale lamellen",
+    fan_speed: "Ventilatorsnelheid",
+    front_view: "Vooraanzicht",
+    side_view: "Zijaanzicht",
+    presets: "Presets",
+    preset_name_ph: "Naam…",
+    preset_save: "+ Opslaan",
+    preset_confirm: "Opslaan",
+    preset_cancel: "Annuleren",
+    preset_this_ac: "Deze AC",
+    preset_global: "Globaal",
+    indoor: "Binnen",
+    outdoor: "Buiten",
+    frost_protection: "Vorstbeveiliging",
+    entrust_3d_auto: "3D Auto",
+    turn_off: "Uitschakelen",
+    turn_on: "Inschakelen",
+    updating: "Bezig…",
+    fan_auto: "A",
+    swing: "Swing",
+    global_badge: "G",
+  },
+};
+
+// ─── Mode definitions ─────────────────────────────────────────────────────────
+// Each entry maps an hvac_mode string to its display label and emoji icon.
+// The "off" mode uses an inline SVG power icon instead (see POWER_SVG below).
 const MODES = {
-  off: { label: "Off", icon: null }, // power btn uses inline SVG, not ⏻
+  off: { label: "Off", icon: null },
   auto: { label: "Auto", icon: "♾" },
   cool: { label: "Cool", icon: "❄" },
   heat: { label: "Heat", icon: "🔥" },
@@ -20,6 +82,8 @@ const MODES = {
   dry: { label: "Dry", icon: "💧" },
 };
 
+// Accent colours per mode — used for the active mode button, temperature display,
+// power button background, and the pending-indicator dot.
 const MODE_COLORS = {
   off: "#555",
   auto: "#7b68ee",
@@ -29,15 +93,17 @@ const MODE_COLORS = {
   dry: "#fff176",
 };
 
-// Inline SVG power icon — replaces ⏻ which has poor mobile font support
+// Inline SVG power icon.  Using SVG instead of the ⏻ Unicode character because
+// ⏻ renders inconsistently or invisibly on many mobile fonts.
 const POWER_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
   <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7A7 7 0 0 1 5 12c0-2.28 1.09-4.3 2.79-5.59L6.37 5A8.93 8.93 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z"
     fill="currentColor"/>
 </svg>`;
 
-// Horizontal vane positions.
-// sides: [left_section, right_section] where each is 'L', 'M', 'R', or null (no line).
-// null sides = swing mode.
+// ─── Horizontal vane positions ────────────────────────────────────────────────
+// sides: [left_section_direction, right_section_direction]
+//   where each direction is 'L' (left), 'M' (centre), or 'R' (right).
+//   null means swing mode — the arrows animate rather than point at a fixed angle.
 const H_POSITIONS = [
   {
     value: "both_left",
@@ -48,19 +114,19 @@ const H_POSITIONS = [
   {
     value: "left_center",
     label: "L + Mid",
-    desc: "Left aims left, right center",
+    desc: "Left aims left, right centre",
     sides: ["L", "M"],
   },
   {
     value: "both_center",
     label: "Both Mid",
-    desc: "Both sections center",
+    desc: "Both sections centre",
     sides: ["M", "M"],
   },
   {
     value: "center_right",
     label: "Mid + R",
-    desc: "Left center, right aims right",
+    desc: "Left centre, right aims right",
     sides: ["M", "R"],
   },
   {
@@ -84,11 +150,13 @@ const H_POSITIONS = [
   { value: "swing", label: "Swing", desc: "Auto swing", sides: null },
 ];
 
-// Angle in degrees for each horizontal direction symbol (top-view, 0=straight forward)
+// Rotation angle (degrees) for each direction symbol, viewed from above.
+// 0° = straight forward, negative = left, positive = right.
 const H_DIR_ANGLE = { L: -45, M: 0, R: 45 };
 
-// Vertical vane positions.
-// angle: degrees below horizontal. null = swing.
+// ─── Vertical vane positions ──────────────────────────────────────────────────
+// angle: degrees below horizontal (10 = nearly horizontal, 65 = nearly vertical down).
+// null angle means swing mode.
 const V_POSITIONS = [
   { value: "1", label: "1", angle: 10 },
   { value: "2", label: "2", angle: 28 },
@@ -97,40 +165,65 @@ const V_POSITIONS = [
   { value: "swing", label: "Swing", angle: null },
 ];
 
+// ─── Card element ─────────────────────────────────────────────────────────────
+
+/**
+ * KazemBridgeCard — custom Lovelace element for a single MHI WF-RAC climate entity.
+ *
+ * Lifecycle:
+ *   setConfig()  — called once by Lovelace with the card's YAML config.
+ *   set hass()   — called by Lovelace on every state update.
+ *   connectedCallback()    — card added to DOM; starts polling and animation loop.
+ *   disconnectedCallback() — card removed from DOM; stops polling and animation.
+ *
+ * Rendering:
+ *   _render()        — full DOM rebuild (called on state changes).
+ *   _renderSvgsOnly() — cheap RAF-frame update: redraws only the two vane SVGs.
+ */
 class KazemBridgeCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._hass = null;
-    this._config = null;
-    this._pending = null;
-    this._queued = {};
+
+    this._hass = null; // Home Assistant object — updated by set hass()
+    this._config = null; // Card YAML config
+
+    this._pending = null; // Optimistic state: { changes: {field: value}, until: timestampMs }
+    this._queued = {}; // Accumulated changes waiting for the debounce flush
     this._debounceTimer = null;
     this._pollInterval = null;
     this._entrustDebounce = null;
-    this._firstHassSet = true;
+    this._savingPreset = false; // Whether the preset-name input form is visible
 
-    // JS-driven animation state — avoids SVG SMIL fighting re-renders.
-    // _vAngle: current DISPLAYED vertical angle (animated in JS, degrees)
-    // _vTarget: where we want to get to
-    // _hAngles: [leftDeg, rightDeg] currently displayed (animated)
-    // _hTargets: [leftDeg, rightDeg] target
-    this._vAngle = null; // null = not yet initialised
+    // ── JS-driven animation state ──────────────────────────────────────────
+    // We animate the vane arrows in JavaScript (requestAnimationFrame) rather
+    // than via SVG SMIL so that React-style re-renders don't restart animations.
+    //
+    // _vAngle:   currently displayed vertical angle (degrees below horizontal)
+    // _vTarget:  the angle we are easing toward
+    // _hAngles:  [leftDegrees, rightDegrees] currently displayed
+    // _hTargets: [leftDegrees, rightDegrees] we are easing toward
+    // null means "not yet initialised — snap to target on first frame".
+    this._vAngle = null;
     this._vTarget = null;
-    this._hAngles = null; // null = not yet initialised
+    this._hAngles = null;
     this._hTargets = null;
     this._rafId = null;
     this._lastRafTs = null;
-    this._savingPreset = false;
   }
 
+  // ─── Lifecycle ─────────────────────────────────────────────────────────────
+
   connectedCallback() {
+    // Poll every 4 seconds so the card stays current even without a state push.
     this._triggerPoll();
     this._pollInterval = setInterval(() => this._triggerPoll(), 4000);
     this._startRaf();
-    this._onGlobalPresets = () => this._render();
-    window.addEventListener("kzb-presets-changed", this._onGlobalPresets);
-    window.addEventListener("storage", this._onGlobalPresets);
+
+    // Re-render when another card instance modifies shared global presets.
+    this._onPresetsChanged = () => this._render();
+    window.addEventListener("kzb-presets-changed", this._onPresetsChanged);
+    window.addEventListener("storage", this._onPresetsChanged);
   }
 
   disconnectedCallback() {
@@ -139,70 +232,90 @@ class KazemBridgeCard extends HTMLElement {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
-    window.removeEventListener("kzb-presets-changed", this._onGlobalPresets);
-    window.removeEventListener("storage", this._onGlobalPresets);
+    window.removeEventListener("kzb-presets-changed", this._onPresetsChanged);
+    window.removeEventListener("storage", this._onPresetsChanged);
   }
 
+  // ─── Animation loop ────────────────────────────────────────────────────────
+
+  /**
+   * Start the requestAnimationFrame loop.
+   * Each frame eases _vAngle → _vTarget and _hAngles → _hTargets at a fixed
+   * angular speed, then calls _renderSvgsOnly() if anything changed.
+   */
   _startRaf() {
     if (this._rafId) return;
-    const loop = (ts) => {
+    const loop = (timestamp) => {
       this._rafId = requestAnimationFrame(loop);
+
+      // dt is capped at 50 ms so a tab wake-up after being hidden doesn't
+      // cause the arrows to jump across large angles in one frame.
       const dt = this._lastRafTs
-        ? Math.min((ts - this._lastRafTs) / 1000, 0.05)
+        ? Math.min((timestamp - this._lastRafTs) / 1000, 0.05)
         : 0;
-      this._lastRafTs = ts;
-      // Ease toward targets at ~8 units/s (fast but smooth)
-      const SPEED = 280; // degrees per second
-      const ease = (cur, tgt) => {
-        if (cur === null) return tgt;
-        const diff = tgt - cur;
-        if (Math.abs(diff) < 0.3) return tgt;
-        return cur + Math.sign(diff) * Math.min(Math.abs(diff), SPEED * dt);
+      this._lastRafTs = timestamp;
+
+      // Move current angle toward target at SPEED degrees per second.
+      const SPEED = 280;
+      const easeAngle = (current, target) => {
+        if (current === null) return target; // snap on first frame
+        const delta = target - current;
+        if (Math.abs(delta) < 0.3) return target; // close enough — snap
+        return (
+          current + Math.sign(delta) * Math.min(Math.abs(delta), SPEED * dt)
+        );
       };
 
-      let dirty = false;
+      let isDirty = false;
 
-      // Vertical
+      // Vertical arrow
       if (this._vTarget !== null && this._vAngle !== this._vTarget) {
-        const next = ease(this._vAngle ?? this._vTarget, this._vTarget);
-        if (next !== this._vAngle) {
-          this._vAngle = next;
-          dirty = true;
+        const nextAngle = easeAngle(
+          this._vAngle ?? this._vTarget,
+          this._vTarget,
+        );
+        if (nextAngle !== this._vAngle) {
+          this._vAngle = nextAngle;
+          isDirty = true;
         }
       }
 
-      // Horizontal — two independent arrows but clamped so they stay within 90° of each other
+      // Horizontal arrows (left and right independently)
       if (this._hTargets !== null) {
         if (this._hAngles === null) this._hAngles = [...this._hTargets];
-        const [tl, tr] = this._hTargets;
-        let nl = ease(this._hAngles[0], tl);
-        let nr = ease(this._hAngles[1], tr);
-        // Clamp: arrows can't be more than 90° apart (irl vane constraint)
-        if (nr - nl > 90) nl = nr - 90;
-        if (nl - nr > 90) nr = nl - 90;
-        if (nl !== this._hAngles[0] || nr !== this._hAngles[1]) {
-          this._hAngles = [nl, nr];
-          dirty = true;
+        const [targetLeft, targetRight] = this._hTargets;
+        let nextLeft = easeAngle(this._hAngles[0], targetLeft);
+        let nextRight = easeAngle(this._hAngles[1], targetRight);
+        // Keep arrows within 90° of each other (physical vane constraint).
+        if (nextRight - nextLeft > 90) nextLeft = nextRight - 90;
+        if (nextLeft - nextRight > 90) nextRight = nextLeft - 90;
+        if (nextLeft !== this._hAngles[0] || nextRight !== this._hAngles[1]) {
+          this._hAngles = [nextLeft, nextRight];
+          isDirty = true;
         }
       }
 
-      if (dirty) this._renderSvgsOnly();
+      if (isDirty) this._renderSvgsOnly();
     };
     this._rafId = requestAnimationFrame(loop);
   }
 
-  // Cheaply update just the two SVG panels without rebuilding the whole card.
-  // Called every RAF frame while an animation is in progress.
+  /**
+   * Cheaply redraw only the two vane SVG panels without rebuilding the whole card.
+   * Called every RAF frame while an animation is in progress.
+   */
   _renderSvgsOnly() {
     const root = this.shadowRoot;
     if (!root) return;
     const panels = root.querySelectorAll(".vane-panel");
     if (panels.length < 2) return;
-    const hSwing = this._attr("swing_horizontal_mode", "normal");
-    const swingMode = this._attr("swing_mode", "1");
-    panels[0].innerHTML = `<div class="section-label">Front view</div>${this._frontViewSvg(hSwing)}`;
-    panels[1].innerHTML = `<div class="section-label">Side view</div>${this._sideViewSvg(swingMode)}`;
+    const hSwingValue = this._attr("swing_horizontal_mode", "normal");
+    const vSwingValue = this._attr("swing_mode", "1");
+    panels[0].innerHTML = `<div class="section-label">${this._t("front_view")}</div>${this._frontViewSvg(hSwingValue)}`;
+    panels[1].innerHTML = `<div class="section-label">${this._t("side_view")}</div>${this._sideViewSvg(vSwingValue)}`;
   }
+
+  // ─── Polling ───────────────────────────────────────────────────────────────
 
   _triggerPoll() {
     if (this._hass && this._config) {
@@ -215,6 +328,8 @@ class KazemBridgeCard extends HTMLElement {
     }
   }
 
+  // ─── Config and hass setters ───────────────────────────────────────────────
+
   setConfig(config) {
     if (!config.entity) throw new Error("kazembridge-card: entity is required");
     this._config = {
@@ -223,22 +338,24 @@ class KazemBridgeCard extends HTMLElement {
       outdoor_sensor: config.outdoor_sensor || null,
     };
     this._render();
-    if (this._hass) {
-      this._triggerPoll();
-    }
+    if (this._hass) this._triggerPoll();
   }
 
   set hass(hass) {
     const wasNull = !this._hass;
     this._hass = hass;
 
+    // Clear optimistic state once the AC confirms our changes (or the timeout expires).
     if (this._pending) {
-      const s = hass.states[this._config?.entity];
-      if (s) {
+      const entityState = hass.states[this._config?.entity];
+      if (entityState) {
         const allConfirmed = Object.entries(this._pending.changes).every(
-          ([f, v]) => {
-            const actual = f === "hvac_mode" ? s.state : s.attributes[f];
-            return actual == v;
+          ([field, value]) => {
+            const actual =
+              field === "hvac_mode"
+                ? entityState.state
+                : entityState.attributes[field];
+            return actual == value;
           },
         );
         if (allConfirmed || Date.now() > this._pending.until) {
@@ -247,10 +364,7 @@ class KazemBridgeCard extends HTMLElement {
       }
     }
 
-    if (wasNull && this._config) {
-      this._triggerPoll();
-    }
-
+    if (wasNull && this._config) this._triggerPoll();
     this._render();
   }
 
@@ -258,33 +372,49 @@ class KazemBridgeCard extends HTMLElement {
     return 6;
   }
 
-  // ─── State helpers ────────────────────────────────────────────────────────
+  // ─── i18n helper ──────────────────────────────────────────────────────────
+
+  /**
+   * Look up a translation key for the current HA language.
+   * Falls back to English if the language or key is missing.
+   */
+  _t(key) {
+    const languageCode = (this._hass?.language || "en").split("-")[0];
+    const strings = STRINGS[languageCode] || STRINGS.en;
+    return strings[key] ?? STRINGS.en[key] ?? key;
+  }
+
+  // ─── State helpers ─────────────────────────────────────────────────────────
 
   _state() {
     if (!this._hass || !this._config) return null;
     return this._hass.states[this._config.entity] || null;
   }
 
+  /**
+   * Return the current value of a state attribute, taking optimistic overrides
+   * into account.  Returns fallback if the attribute is absent.
+   */
   _attr(key, fallback = null) {
-    const s = this._state();
+    const entityState = this._state();
     if (
       this._pending?.changes[key] !== undefined &&
       Date.now() < this._pending.until
     ) {
       return this._pending.changes[key];
     }
-    return s ? (s.attributes[key] ?? fallback) : fallback;
+    return entityState ? (entityState.attributes[key] ?? fallback) : fallback;
   }
 
   _mode() {
-    const s = this._state();
+    const entityState = this._state();
     if (
       this._pending?.changes["hvac_mode"] !== undefined &&
       Date.now() < this._pending.until
     ) {
       return this._pending.changes["hvac_mode"];
     }
-    return s ? s.state : "off";
+    return entityState ? entityState.state : "off";
   }
 
   _isOn() {
@@ -297,12 +427,17 @@ class KazemBridgeCard extends HTMLElement {
 
   _sensorValue(entityId) {
     if (!entityId || !this._hass) return null;
-    const s = this._hass.states[entityId];
-    return s ? parseFloat(s.state) : null;
+    const sensorState = this._hass.states[entityId];
+    return sensorState ? parseFloat(sensorState.state) : null;
   }
 
-  // ─── Action queue + debounce ──────────────────────────────────────────────
+  // ─── Action queue + debounce ───────────────────────────────────────────────
 
+  /**
+   * Queue a field change and optimistically update the UI immediately.
+   * All queued changes are flushed to the AC after a 600 ms debounce,
+   * so rapid button presses coalesce into a single network request.
+   */
   _queue(field, value) {
     this._queued[field] = value;
     if (!this._pending)
@@ -323,42 +458,49 @@ class KazemBridgeCard extends HTMLElement {
     });
   }
 
-  // ─── Action methods ───────────────────────────────────────────────────────
+  // ─── Action methods ────────────────────────────────────────────────────────
 
   _setMode(mode) {
     this._queue("hvac_mode", mode);
   }
 
+  _setFan(fanSpeed) {
+    this._queue("fan_mode", fanSpeed);
+  }
+
   _adjustTemp(delta) {
-    const cur = this._attr("temperature", 22);
-    const next = Math.max(16, Math.min(31, Math.round((cur + delta) * 2) / 2));
+    const current = this._attr("temperature", 22);
+    const next = Math.max(
+      16,
+      Math.min(31, Math.round((current + delta) * 2) / 2),
+    );
     this._queue("temperature", next);
   }
 
-  _setFan(mode) {
-    this._queue("fan_mode", mode);
+  _setSwing(vSwingValue) {
+    this._queue("swing_mode", vSwingValue);
   }
 
-  _setSwing(mode) {
-    this._queue("swing_mode", mode);
+  _setHSwing(hSwingValue) {
+    this._queue("swing_horizontal_mode", hSwingValue);
   }
 
-  _setHSwing(value) {
-    this._queue("swing_horizontal_mode", value);
-  }
-
+  /**
+   * Toggle entrust (3D auto) mode.  Uses its own debounce timer because entrust
+   * calls the standard climate service rather than the custom set_state service.
+   */
   _toggleEntrust() {
-    const cur = this._attr("preset_mode", "none") === "3d_auto";
+    const isCurrentlyOn = this._attr("preset_mode", "none") === "3d_auto";
     clearTimeout(this._entrustDebounce);
     this._entrustDebounce = setTimeout(() => {
       this._hass.callService("climate", "set_preset_mode", {
         entity_id: this._config.entity,
-        preset_mode: cur ? "none" : "3d_auto",
+        preset_mode: isCurrentlyOn ? "none" : "3d_auto",
       });
     }, 600);
     if (!this._pending)
       this._pending = { changes: {}, until: Date.now() + 30000 };
-    this._pending.changes["preset_mode"] = cur ? "none" : "3d_auto";
+    this._pending.changes["preset_mode"] = isCurrentlyOn ? "none" : "3d_auto";
     this._pending.until = Date.now() + 30000;
     this._render();
   }
@@ -366,249 +508,295 @@ class KazemBridgeCard extends HTMLElement {
   // ─── SVG helpers ──────────────────────────────────────────────────────────
 
   /**
-   * Front view. Fixed positions use JS-animated _hAngles (updated by RAF loop).
-   * Swing uses SMIL (continuous, re-render-safe).
+   * Build the front-view SVG (top-down diagram showing horizontal airflow).
+   *
+   * Fixed positions: the RAF loop continuously eases _hAngles toward _hTargets,
+   * and _renderSvgsOnly() redraws the SVG each frame using the current angles.
+   * This avoids SVG SMIL fighting full re-renders.
+   *
+   * Swing mode: uses SMIL animateTransform so the animation runs continuously
+   * and survives re-renders without resetting.
    */
-  _frontViewSvg(hValue) {
+  _frontViewSvg(hSwingValue) {
     const VB_W = 200,
       VB_H = 100;
-    const BX = 4,
-      BY = 8,
-      BW = VB_W - 8,
-      BH = 36;
-    const arrowRootY = BY + BH;
-    const MID = VB_W / 2;
-    const lx = MID / 2,
-      rx = MID + MID / 2;
+    const BOX_X = 4,
+      BOX_Y = 8,
+      BOX_W = VB_W - 8,
+      BOX_H = 36;
+    const arrowRootY = BOX_Y + BOX_H;
+    const centerX = VB_W / 2;
+    const leftX = centerX / 2;
+    const rightX = centerX + centerX / 2;
 
-    const pos = H_POSITIONS.find((p) => p.value === hValue) || H_POSITIONS[0];
+    const position =
+      H_POSITIONS.find((pos) => pos.value === hSwingValue) || H_POSITIONS[0];
 
-    // Keep targets updated; RAF loop eases _hAngles toward them each frame
-    if (pos.sides !== null) {
-      const tl = H_DIR_ANGLE[pos.sides[0]];
-      const tr = H_DIR_ANGLE[pos.sides[1]];
-      const changed =
-        !this._hTargets || this._hTargets[0] !== tl || this._hTargets[1] !== tr;
-      if (changed) {
-        this._hTargets = [tl, tr];
-        if (this._hAngles === null) this._hAngles = [tl, tr]; // snap on first render
+    // Update the RAF animation targets whenever the position changes.
+    if (position.sides !== null) {
+      const targetLeft = H_DIR_ANGLE[position.sides[0]];
+      const targetRight = H_DIR_ANGLE[position.sides[1]];
+      const targetsChanged =
+        !this._hTargets ||
+        this._hTargets[0] !== targetLeft ||
+        this._hTargets[1] !== targetRight;
+      if (targetsChanged) {
+        this._hTargets = [targetLeft, targetRight];
+        if (this._hAngles === null) this._hAngles = [targetLeft, targetRight]; // snap on first render
       }
     }
 
-    const body = `
-      <rect x="${BX}" y="${BY}" width="${BW}" height="${BH}" rx="6" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
-      <line x1="${BX + 12}" y1="${BY + 11}" x2="${BX + BW - 12}" y2="${BY + 11}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="${BX + 12}" y1="${BY + 21}" x2="${BX + BW - 12}" y2="${BY + 21}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="${BX + 12}" y1="${BY + 31}" x2="${BX + BW - 12}" y2="${BY + 31}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
-      <line x1="${MID}" y1="${BY + 4}" x2="${MID}" y2="${BY + BH - 4}" stroke="#2a2a3a" stroke-width="1.5"/>
-      <circle cx="${BX + BW - 10}" cy="${BY + 8}" r="4" fill="${this._isOn() ? "#4caf50" : "#444"}" opacity="0.9"/>`;
+    const bodyHtml = `
+      <rect x="${BOX_X}" y="${BOX_Y}" width="${BOX_W}" height="${BOX_H}" rx="6" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
+      <line x1="${BOX_X + 12}" y1="${BOX_Y + 11}" x2="${BOX_X + BOX_W - 12}" y2="${BOX_Y + 11}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="${BOX_X + 12}" y1="${BOX_Y + 21}" x2="${BOX_X + BOX_W - 12}" y2="${BOX_Y + 21}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="${BOX_X + 12}" y1="${BOX_Y + 31}" x2="${BOX_X + BOX_W - 12}" y2="${BOX_Y + 31}" stroke="#383848" stroke-width="1.5" stroke-dasharray="4,4"/>
+      <line x1="${centerX}" y1="${BOX_Y + 4}" x2="${centerX}" y2="${BOX_Y + BOX_H - 4}" stroke="#2a2a3a" stroke-width="1.5"/>
+      <circle cx="${BOX_X + BOX_W - 10}" cy="${BOX_Y + 8}" r="4" fill="${this._isOn() ? "#4caf50" : "#444"}" opacity="0.9"/>`;
 
-    // Static arrow at exact angle — no animation needed, RAF moves it every frame
-    const arrowAt = (cx, deg) => {
-      const LEN = 36,
-        HEAD = 7;
-      const r = (deg * Math.PI) / 180;
-      const adx = Math.sin(r),
-        ady = Math.cos(r);
-      const pdx = Math.cos(r),
-        pdy = -Math.sin(r);
-      const x0 = cx,
-        y0 = arrowRootY;
-      const xt = x0 + adx * LEN,
-        yt = y0 + ady * LEN;
-      const xb = xt - adx * HEAD,
-        yb = yt - ady * HEAD;
-      const hw = HEAD * 0.55;
+    // Draw a static arrow at the given angle.  The RAF loop moves the angle
+    // each frame, so the arrow appears to animate without SMIL.
+    const drawStaticArrow = (centerXPos, angleDeg) => {
+      const ARROW_LEN = 36,
+        HEAD_LEN = 7;
+      const angleRad = (angleDeg * Math.PI) / 180;
+      // adx/ady: unit vector along the arrow direction.
+      // pdx/pdy: unit vector perpendicular to the arrow (for the arrowhead wings).
+      const adx = Math.sin(angleRad),
+        ady = Math.cos(angleRad);
+      const pdx = Math.cos(angleRad),
+        pdy = -Math.sin(angleRad);
+      const rootX = centerXPos,
+        rootY = arrowRootY;
+      const tipX = rootX + adx * ARROW_LEN,
+        tipY = rootY + ady * ARROW_LEN;
+      const baseX = tipX - adx * HEAD_LEN,
+        baseY = tipY - ady * HEAD_LEN;
+      const halfW = HEAD_LEN * 0.55;
       return `<g opacity="0.9">
-        <line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}"
-              x2="${(xt - adx * 3).toFixed(1)}" y2="${(yt - ady * 3).toFixed(1)}"
+        <line x1="${rootX.toFixed(1)}" y1="${rootY.toFixed(1)}"
+              x2="${(tipX - adx * 3).toFixed(1)}" y2="${(tipY - ady * 3).toFixed(1)}"
           stroke="#4fc3f7" stroke-width="1.8" stroke-dasharray="4,3"/>
-        <path d="M${(xb - pdx * hw).toFixed(1)},${(yb - pdy * hw).toFixed(1)}
-                 L${xt.toFixed(1)},${yt.toFixed(1)}
-                 L${(xb + pdx * hw).toFixed(1)},${(yb + pdy * hw).toFixed(1)}"
+        <path d="M${(baseX - pdx * halfW).toFixed(1)},${(baseY - pdy * halfW).toFixed(1)}
+                 L${tipX.toFixed(1)},${tipY.toFixed(1)}
+                 L${(baseX + pdx * halfW).toFixed(1)},${(baseY + pdy * halfW).toFixed(1)}"
           fill="#4fc3f7"/>
       </g>`;
     };
 
-    let arrowContent = "";
+    let arrowsHtml = "";
 
-    if (pos.sides === null) {
-      // SWING: triangle wave, left leads right by a small offset so they stay close
-      // but visibly staggered. 0.2s lag = they're never more than ~10° apart.
-      const dur = 3.6,
-        steps = 80;
-      const phase = ((Date.now() / 1000) % dur).toFixed(2);
-      const makeDegs = (phaseShift) => {
-        const out = [];
-        for (let i = 0; i <= steps; i++) {
-          const t = (i / steps + phaseShift / dur) % 1;
-          const tri = t < 0.5 ? 1 - t * 2 : (t - 0.5) * 2;
-          out.push(-45 + tri * 90);
+    if (position.sides === null) {
+      // ── Swing: SMIL triangle-wave animation ──────────────────────────────
+      // Left arrow leads right by 0.2 s so they look slightly staggered but
+      // stay close together (never more than ~10° apart).
+      const CYCLE_DURATION = 3.6,
+        STEPS = 80;
+      const currentPhase = ((Date.now() / 1000) % CYCLE_DURATION).toFixed(2);
+
+      const makeAngleValues = (phaseShiftSeconds) => {
+        const values = [];
+        for (let step = 0; step <= STEPS; step++) {
+          const normalised =
+            (step / STEPS + phaseShiftSeconds / CYCLE_DURATION) % 1;
+          const triangle =
+            normalised < 0.5 ? 1 - normalised * 2 : (normalised - 0.5) * 2;
+          values.push(-45 + triangle * 90);
         }
-        return out;
+        return values;
       };
-      // Left leads by 0.2s (≈1/18 of cycle) — close together, not in lockstep
-      const leftDegs = makeDegs(0),
-        rightDegs = makeDegs(0.2);
-      const kTimes = leftDegs.map((_, i) => (i / steps).toFixed(4)).join(";");
-      const LEN = 36,
-        HEAD = 7,
-        hw = HEAD * 0.55;
-      const animArrow = (cx, degs) => {
-        const vals = degs.map((d) => `${d} ${cx} ${arrowRootY}`).join(";");
-        const anim = `<animateTransform attributeName="transform" type="rotate"
-          values="${vals}" keyTimes="${kTimes}" dur="${dur}s"
-          repeatCount="indefinite" begin="-${phase}s" calcMode="linear" additive="sum"/>`;
-        const y0 = arrowRootY,
-          yt = y0 + LEN,
-          yb = yt - HEAD;
+
+      const leftAngles = makeAngleValues(0);
+      const rightAngles = makeAngleValues(0.2);
+      const keyTimes = leftAngles
+        .map((_, index) => (index / STEPS).toFixed(4))
+        .join(";");
+      const ARROW_LEN = 36,
+        HEAD_LEN = 7,
+        halfW = HEAD_LEN * 0.55;
+
+      const drawAnimatedArrow = (arrowX, angleValues) => {
+        const rotateValues = angleValues
+          .map((deg) => `${deg} ${arrowX} ${arrowRootY}`)
+          .join(";");
+        const animation = `<animateTransform attributeName="transform" type="rotate"
+          values="${rotateValues}" keyTimes="${keyTimes}" dur="${CYCLE_DURATION}s"
+          repeatCount="indefinite" begin="-${currentPhase}s" calcMode="linear" additive="sum"/>`;
+        const tipY = arrowRootY + ARROW_LEN;
+        const baseY = tipY - HEAD_LEN;
         return `<g opacity="0.85">
-          <line x1="${cx}" y1="${y0}" x2="${cx}" y2="${(yt - 3).toFixed(1)}"
-            stroke="#4fc3f7" stroke-width="1.8" stroke-dasharray="4,3">${anim}</line>
-          <path d="M${(cx - hw).toFixed(1)},${yb.toFixed(1)} L${cx},${yt.toFixed(1)} L${(cx + hw).toFixed(1)},${yb.toFixed(1)}"
-            fill="#4fc3f7">${anim}</path>
+          <line x1="${arrowX}" y1="${arrowRootY}" x2="${arrowX}" y2="${(tipY - 3).toFixed(1)}"
+            stroke="#4fc3f7" stroke-width="1.8" stroke-dasharray="4,3">${animation}</line>
+          <path d="M${(arrowX - halfW).toFixed(1)},${baseY.toFixed(1)} L${arrowX},${tipY.toFixed(1)} L${(arrowX + halfW).toFixed(1)},${baseY.toFixed(1)}"
+            fill="#4fc3f7">${animation}</path>
         </g>`;
       };
-      arrowContent = animArrow(lx, leftDegs) + animArrow(rx, rightDegs);
+
+      arrowsHtml =
+        drawAnimatedArrow(leftX, leftAngles) +
+        drawAnimatedArrow(rightX, rightAngles);
     } else {
-      // FIXED: just render at current animated angles — RAF is already moving them
-      const [al, ar] = this._hAngles ?? [
-        H_DIR_ANGLE[pos.sides[0]],
-        H_DIR_ANGLE[pos.sides[1]],
+      // ── Fixed: render at current animated angles (RAF is moving them) ────
+      const [currentLeft, currentRight] = this._hAngles ?? [
+        H_DIR_ANGLE[position.sides[0]],
+        H_DIR_ANGLE[position.sides[1]],
       ];
-      arrowContent = arrowAt(lx, al) + arrowAt(rx, ar);
+      arrowsHtml =
+        drawStaticArrow(leftX, currentLeft) +
+        drawStaticArrow(rightX, currentRight);
     }
 
     return `<svg viewBox="0 0 ${VB_W} ${VB_H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
-      ${body}${arrowContent}
+      ${bodyHtml}${arrowsHtml}
     </svg>`;
   }
 
   /**
-   * Side view. Fixed positions use JS-animated _vAngle (updated by RAF loop).
-   * Swing uses SMIL (continuous, re-render-safe). Tip sweeps downward.
+   * Build the side-view SVG (profile diagram showing vertical airflow).
+   *
+   * Fixed positions: animated via the RAF loop (same approach as the front view).
+   * Swing mode: continuous SMIL animation — tip sweeps downward.
    */
-  _sideViewSvg(vValue) {
+  _sideViewSvg(vSwingValue) {
     const VB_W = 200,
       VB_H = 105;
-    const BW = 68,
-      BH = 30,
-      BX = VB_W - BW - 36,
-      BY = 6;
-    const VX = BX,
-      VY = BY + BH;
-    const VLEN = 36;
+    const BOX_W = 68,
+      BOX_H = 30;
+    const BOX_X = VB_W - BOX_W - 36,
+      BOX_Y = 6;
+    const VANE_X = BOX_X,
+      VANE_Y = BOX_Y + BOX_H;
+    const VANE_LEN = 36;
 
-    const vpos = V_POSITIONS.find((p) => p.value === vValue) || V_POSITIONS[0];
-    const isSwing = vValue === "swing";
+    const vposition =
+      V_POSITIONS.find((pos) => pos.value === vSwingValue) || V_POSITIONS[0];
+    const isSwing = vSwingValue === "swing";
 
-    // Keep target updated; RAF eases _vAngle toward it
+    // Keep RAF target updated.
     if (!isSwing) {
-      if (this._vTarget !== vpos.angle) {
-        this._vTarget = vpos.angle;
-        if (this._vAngle === null) this._vAngle = vpos.angle; // snap on first render
+      if (this._vTarget !== vposition.angle) {
+        this._vTarget = vposition.angle;
+        if (this._vAngle === null) this._vAngle = vposition.angle; // snap on first render
       }
     }
 
-    // vaneEnd: tip of vane at `deg` degrees below horizontal, pointing left from (VX,VY)
-    const vaneEnd = (deg) => {
-      const r = (deg * Math.PI) / 180;
-      return [VX - VLEN * Math.cos(r), VY + VLEN * Math.sin(r)];
+    // vaneEndpoint: coordinates of the vane tip at `angleDeg` below horizontal,
+    // pointing left from the pivot point (VANE_X, VANE_Y).
+    const vaneEndpoint = (angleDeg) => {
+      const angleRad = (angleDeg * Math.PI) / 180;
+      return [
+        VANE_X - VANE_LEN * Math.cos(angleRad),
+        VANE_Y + VANE_LEN * Math.sin(angleRad),
+      ];
     };
 
-    const flowArrows = (deg) => {
-      const r = (deg * Math.PI) / 180;
-      const adx = -Math.cos(r),
-        ady = Math.sin(r);
-      const pdx = -Math.sin(r),
-        pdy = -Math.cos(r);
-      const LEN = 32,
-        HEAD = 6;
-      const tipX = VX + adx * VLEN,
-        tipY = VY + ady * VLEN;
+    // Draw three airflow arrows fanning out from the vane tip at the given angle.
+    const drawFlowArrows = (angleDeg) => {
+      const angleRad = (angleDeg * Math.PI) / 180;
+      // adx/ady: along the airflow direction (away from the vane).
+      // pdx/pdy: perpendicular to it (for positioning the three parallel arrows).
+      const adx = -Math.cos(angleRad),
+        ady = Math.sin(angleRad);
+      const pdx = -Math.sin(angleRad),
+        pdy = -Math.cos(angleRad);
+      const FLOW_LEN = 32,
+        HEAD_LEN = 6;
+      const tipX = VANE_X + adx * VANE_LEN,
+        tipY = VANE_Y + ady * VANE_LEN;
+
       return [-9, 0, 9]
-        .map((off, i) => {
-          const ox = tipX + pdx * off + adx * 2,
-            oy = tipY + pdy * off + ady * 2;
-          const ex = ox + adx * LEN,
-            ey = oy + ady * LEN;
-          const xb = ex - adx * HEAD,
-            yb = ey - ady * HEAD;
-          const op = i === 1 ? 0.9 : 0.5;
+        .map((offset, index) => {
+          const startX = tipX + pdx * offset + adx * 2;
+          const startY = tipY + pdy * offset + ady * 2;
+          const endX = startX + adx * FLOW_LEN;
+          const endY = startY + ady * FLOW_LEN;
+          const baseX = endX - adx * HEAD_LEN;
+          const baseY = endY - ady * HEAD_LEN;
+          // bpx/bpy: perpendicular to the arrow direction (for arrowhead wings).
           const bpx = pdy,
             bpy = -pdx;
-          return `<g opacity="${op}">
-          <line x1="${ox.toFixed(1)}" y1="${oy.toFixed(1)}"
-                x2="${(ex - adx * 2).toFixed(1)}" y2="${(ey - ady * 2).toFixed(1)}"
+          const opacity = index === 1 ? 0.9 : 0.5; // centre arrow is brightest
+          return `<g opacity="${opacity}">
+          <line x1="${startX.toFixed(1)}" y1="${startY.toFixed(1)}"
+                x2="${(endX - adx * 2).toFixed(1)}" y2="${(endY - ady * 2).toFixed(1)}"
             stroke="#4fc3f7" stroke-width="1.5" stroke-dasharray="4,3"/>
-          <path d="M${(xb + bpx * HEAD * 0.55).toFixed(1)},${(yb + bpy * HEAD * 0.55).toFixed(1)}
-                   L${ex.toFixed(1)},${ey.toFixed(1)}
-                   L${(xb - bpx * HEAD * 0.55).toFixed(1)},${(yb - bpy * HEAD * 0.55).toFixed(1)}"
+          <path d="M${(baseX + bpx * HEAD_LEN * 0.55).toFixed(1)},${(baseY + bpy * HEAD_LEN * 0.55).toFixed(1)}
+                   L${endX.toFixed(1)},${endY.toFixed(1)}
+                   L${(baseX - bpx * HEAD_LEN * 0.55).toFixed(1)},${(baseY - bpy * HEAD_LEN * 0.55).toFixed(1)}"
             fill="#4fc3f7"/>
         </g>`;
         })
         .join("");
     };
 
-    let vaneContent = "";
+    let vaneHtml = "";
 
     if (isSwing) {
-      // SWING: SMIL. Negative rotation values so tip sweeps downward.
-      const minA = 10,
-        maxA = 65,
-        steps = 80,
-        dur = 3.6;
-      const phase = ((Date.now() / 1000) % dur).toFixed(2);
+      // ── Swing: SMIL triangle-wave animation ──────────────────────────────
+      const MIN_ANGLE = 10,
+        MAX_ANGLE = 65,
+        STEPS = 80,
+        CYCLE_DURATION = 3.6;
+      const currentPhase = ((Date.now() / 1000) % CYCLE_DURATION).toFixed(2);
       const allAngles = [];
-      for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        const tri = t < 0.5 ? t * 2 : (1 - t) * 2;
-        allAngles.push(minA + tri * (maxA - minA));
+      for (let step = 0; step <= STEPS; step++) {
+        const normalised = step / STEPS;
+        const triangle =
+          normalised < 0.5 ? normalised * 2 : (1 - normalised) * 2;
+        allAngles.push(MIN_ANGLE + triangle * (MAX_ANGLE - MIN_ANGLE));
       }
-      const kTimes = allAngles.map((_, i) => (i / steps).toFixed(4)).join(";");
-      const values = allAngles.map((a) => `-${a} ${VX} ${VY}`).join(";");
-      const [vx2, vy2] = vaneEnd(minA);
-      vaneContent = `
-        <line x1="${VX}" y1="${VY}" x2="${vx2.toFixed(1)}" y2="${vy2.toFixed(1)}"
+      const keyTimes = allAngles
+        .map((_, i) => (i / STEPS).toFixed(4))
+        .join(";");
+      // Negative rotation values because SVG rotates clockwise; we want the tip to sweep downward.
+      const rotateValues = allAngles
+        .map((angle) => `-${angle} ${VANE_X} ${VANE_Y}`)
+        .join(";");
+      const [startX, startY] = vaneEndpoint(MIN_ANGLE);
+      vaneHtml = `
+        <line x1="${VANE_X}" y1="${VANE_Y}" x2="${startX.toFixed(1)}" y2="${startY.toFixed(1)}"
             stroke="#bbb" stroke-width="5" stroke-linecap="round">
           <animateTransform attributeName="transform" type="rotate"
-            values="${values}" keyTimes="${kTimes}"
-            dur="${dur}s" repeatCount="indefinite" begin="-${phase}s" calcMode="linear"/>
+            values="${rotateValues}" keyTimes="${keyTimes}"
+            dur="${CYCLE_DURATION}s" repeatCount="indefinite" begin="-${currentPhase}s" calcMode="linear"/>
         </line>`;
     } else {
-      // FIXED: render at current JS-animated angle — no SMIL needed
-      const displayAngle = this._vAngle ?? vpos.angle;
-      const [vx2, vy2] = vaneEnd(displayAngle);
-      vaneContent =
-        `<line x1="${VX}" y1="${VY}" x2="${vx2.toFixed(1)}" y2="${vy2.toFixed(1)}"
+      // ── Fixed: render at current JS-animated angle ────────────────────────
+      const displayAngle = this._vAngle ?? vposition.angle;
+      const [vEndX, vEndY] = vaneEndpoint(displayAngle);
+      vaneHtml =
+        `<line x1="${VANE_X}" y1="${VANE_Y}" x2="${vEndX.toFixed(1)}" y2="${vEndY.toFixed(1)}"
             stroke="#bbb" stroke-width="5" stroke-linecap="round"/>` +
-        flowArrows(displayAngle);
+        drawFlowArrows(displayAngle);
     }
 
+    // Small tick marks along the bottom edge of the AC body (decorative).
     const ticks = Array.from(
       { length: 6 },
-      (_, i) =>
-        `<line x1="${BX + 8 + i * 10}" y1="${BY + BH}" x2="${BX + 8 + i * 10}" y2="${BY + BH + 5}" stroke="#3a3a4a" stroke-width="1.5"/>`,
+      (_, index) =>
+        `<line x1="${BOX_X + 8 + index * 10}" y1="${BOX_Y + BOX_H}" x2="${BOX_X + 8 + index * 10}" y2="${BOX_Y + BOX_H + 5}" stroke="#3a3a4a" stroke-width="1.5"/>`,
     ).join("");
 
     return `<svg viewBox="0 0 ${VB_W} ${VB_H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:220px;">
-      <rect x="${BX}" y="${BY}" width="${BW}" height="${BH}" rx="5" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
+      <rect x="${BOX_X}" y="${BOX_Y}" width="${BOX_W}" height="${BOX_H}" rx="5" fill="#25252f" stroke="#3a3a4a" stroke-width="1"/>
       ${ticks}
-      <line x1="${BX}" y1="${BY + 3}" x2="${BX}" y2="${BY + BH - 3}" stroke="#4a4a5a" stroke-width="2.5"/>
-      <circle cx="${BX + BW - 10}" cy="${BY + 8}" r="4" fill="${this._isOn() ? "#4caf50" : "#444"}" opacity="0.9"/>
-      ${vaneContent}
+      <line x1="${BOX_X}" y1="${BOX_Y + 3}" x2="${BOX_X}" y2="${BOX_Y + BOX_H - 3}" stroke="#4a4a5a" stroke-width="2.5"/>
+      <circle cx="${BOX_X + BOX_W - 10}" cy="${BOX_Y + 8}" r="4" fill="${this._isOn() ? "#4caf50" : "#444"}" opacity="0.9"/>
+      ${vaneHtml}
     </svg>`;
   }
 
-  // ─── Buttons ──────────────────────────────────────────────────────────────
+  // ─── Button builders ───────────────────────────────────────────────────────
 
-  _modeButtons(currentMode) {
+  _modeButtonsHtml(currentMode) {
     return Object.entries(MODES)
-      .map(([mode, { label, icon }]) => {
+      .map(([modeKey, { label, icon }]) => {
         const iconHtml =
-          mode === "off" ? POWER_SVG : `<span class="mode-icon">${icon}</span>`;
+          modeKey === "off"
+            ? POWER_SVG
+            : `<span class="mode-icon">${icon}</span>`;
         return `
-        <button class="mode-btn ${mode === currentMode ? "active" : ""}" data-mode="${mode}" title="${label}">
+        <button class="mode-btn ${modeKey === currentMode ? "active" : ""}" data-mode="${modeKey}" title="${label}">
           ${iconHtml}
           <span class="mode-label">${label}</span>
         </button>`;
@@ -616,143 +804,163 @@ class KazemBridgeCard extends HTMLElement {
       .join("");
   }
 
-  _fanButtons(currentFan) {
+  _fanButtonsHtml(currentFanMode) {
     return ["auto", "1", "2", "3", "4"]
       .map(
-        (f) => `
-      <button class="fan-btn ${f === currentFan ? "active" : ""}" data-fan="${f}"
-        title="${f === "auto" ? "Auto" : `Speed ${f}`}">
-        ${f === "auto" ? "A" : f}
+        (fanSpeed) => `
+      <button class="fan-btn ${fanSpeed === currentFanMode ? "active" : ""}" data-fan="${fanSpeed}"
+        title="${fanSpeed === "auto" ? "Auto" : `Speed ${fanSpeed}`}">
+        ${fanSpeed === "auto" ? this._t("fan_auto") : fanSpeed}
       </button>`,
       )
       .join("");
   }
 
-  _verticalVaneButtons(current) {
-    return V_POSITIONS.map((p) => {
-      const active = p.value === current;
-      const isSwing = p.value === "swing";
+  _verticalVaneButtonsHtml(currentVSwing) {
+    return V_POSITIONS.map((vpos) => {
+      const isActive = vpos.value === currentVSwing;
+      const isSwing = vpos.value === "swing";
+      let iconHtml;
 
-      let icon;
       if (isSwing) {
-        icon = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
+        // Up-down chevrons to indicate oscillation.
+        iconHtml = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
           <path d="M7 10l5-5 5 5H7zm10 4l-5 5-5-5h10z" fill="currentColor"/>
         </svg>`;
       } else {
-        const r = (p.angle * Math.PI) / 180;
-        const ox = 20,
-          oy = 5;
-        const LEN = 15,
+        // Arrow pointing at the vane angle.
+        const angleRad = (vpos.angle * Math.PI) / 180;
+        const originX = 20,
+          originY = 5,
+          LEN = 15,
           HEAD = 5;
-        const adx = -Math.cos(r),
-          ady = Math.sin(r);
-        const pdx = -Math.sin(r),
-          pdy = -Math.cos(r);
-        const ex = ox + adx * LEN,
-          ey = oy + ady * LEN;
-        const xb = ex - adx * HEAD,
-          yb = ey - ady * HEAD;
-        icon = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
-          <line x1="${ox}" y1="${oy}" x2="${(ex + adx * 2).toFixed(1)}" y2="${(ey + ady * 2).toFixed(1)}"
+        const adx = -Math.cos(angleRad),
+          ady = Math.sin(angleRad);
+        const pdx = -Math.sin(angleRad),
+          pdy = -Math.cos(angleRad);
+        const endX = originX + adx * LEN,
+          endY = originY + ady * LEN;
+        const baseX = endX - adx * HEAD,
+          baseY = endY - ady * HEAD;
+        iconHtml = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
+          <line x1="${originX}" y1="${originY}" x2="${(endX + adx * 2).toFixed(1)}" y2="${(endY + ady * 2).toFixed(1)}"
             stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M${(xb - pdx * HEAD * 0.6).toFixed(1)},${(yb - pdy * HEAD * 0.6).toFixed(1)}
-                   L${ex.toFixed(1)},${ey.toFixed(1)}
-                   L${(xb + pdx * HEAD * 0.6).toFixed(1)},${(yb + pdy * HEAD * 0.6).toFixed(1)}"
+          <path d="M${(baseX - pdx * HEAD * 0.6).toFixed(1)},${(baseY - pdy * HEAD * 0.6).toFixed(1)}
+                   L${endX.toFixed(1)},${endY.toFixed(1)}
+                   L${(baseX + pdx * HEAD * 0.6).toFixed(1)},${(baseY + pdy * HEAD * 0.6).toFixed(1)}"
             fill="currentColor"/>
         </svg>`;
       }
 
-      return `<button class="vane-btn ${active ? "active" : ""}" data-vswing="${p.value}"
-          title="${p.label}">
-          ${icon}
+      return `<button class="vane-btn ${isActive ? "active" : ""}" data-vswing="${vpos.value}" title="${vpos.label}">
+          ${iconHtml}
         </button>`;
     }).join("");
   }
 
-  _horizontalVaneButtons(currentH) {
+  _horizontalVaneButtonsHtml(currentHSwing) {
     return H_POSITIONS.map(
-      (p) => `
-      <button class="vane-btn h-vane-btn ${p.value === currentH ? "active" : ""}"
-        data-hswing="${p.value}" title="${p.desc}">
-        ${this._hSectionSvg(p.sides, p.value === currentH)}
+      (hpos) => `
+      <button class="vane-btn h-vane-btn ${hpos.value === currentHSwing ? "active" : ""}"
+        data-hswing="${hpos.value}" title="${hpos.desc}">
+        ${this._hSectionSvg(hpos.sides, hpos.value === currentHSwing)}
       </button>`,
     ).join("");
   }
 
-  _hSectionSvg(sides, active = false) {
-    const W = 36,
-      H = 32;
-    const col = active ? "#4fc3f7" : "#666";
-    const mid = W / 2;
-    const bodyT = 4,
-      bodyH = 9;
-    const rootY = bodyT + bodyH;
+  /**
+   * Build a small top-down SVG icon for a horizontal vane button.
+   * Shows an AC body outline and directional arrows for each louver section.
+   */
+  _hSectionSvg(sides, isActive = false) {
+    const SVG_W = 36,
+      SVG_H = 32;
+    const arrowColor = isActive ? "#4fc3f7" : "#666";
+    const midX = SVG_W / 2;
+    const bodyTop = 4,
+      bodyHeight = 9;
+    const arrowRootY = bodyTop + bodyHeight;
 
-    const bodyRect = `
-      <rect x="2" y="${bodyT}" width="${W - 4}" height="${bodyH}" rx="3"
-        fill="#25252f" stroke="${col}" stroke-width="1" opacity="0.7"/>
-      <line x1="${mid}" y1="${bodyT + 2}" x2="${mid}" y2="${rootY - 2}"
-        stroke="${col}" stroke-width="1" opacity="0.5"/>`;
+    const bodyHtml = `
+      <rect x="2" y="${bodyTop}" width="${SVG_W - 4}" height="${bodyHeight}" rx="3"
+        fill="#25252f" stroke="${arrowColor}" stroke-width="1" opacity="0.7"/>
+      <line x1="${midX}" y1="${bodyTop + 2}" x2="${midX}" y2="${arrowRootY - 2}"
+        stroke="${arrowColor}" stroke-width="1" opacity="0.5"/>`;
 
     if (sides === null) {
-      return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-        ${bodyRect}
-        <path d="M4,${rootY + 9} l4,-3 v2 h4 v2 h-4 v2 z" fill="${col}"/>
-        <path d="M32,${rootY + 9} l-4,-3 v2 h-4 v2 h4 v2 z" fill="${col}"/>
-        <circle cx="${mid}" cy="${rootY + 9}" r="1.5" fill="${col}" opacity="0.6"/>
+      // Swing indicator: two horizontal arrows pointing outward with a centre dot.
+      return `<svg viewBox="0 0 ${SVG_W} ${SVG_H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+        ${bodyHtml}
+        <path d="M4,${arrowRootY + 9} l4,-3 v2 h4 v2 h-4 v2 z" fill="${arrowColor}"/>
+        <path d="M32,${arrowRootY + 9} l-4,-3 v2 h-4 v2 h4 v2 z" fill="${arrowColor}"/>
+        <circle cx="${midX}" cy="${arrowRootY + 9}" r="1.5" fill="${arrowColor}" opacity="0.6"/>
       </svg>`;
     }
 
-    const arrow = (cx, dir) => {
-      if (!dir) return "";
-      const LEN = 11,
-        HEAD = 4;
-      const deg = H_DIR_ANGLE[dir];
-      const r = (deg * Math.PI) / 180;
-      const adx = Math.sin(r),
-        ady = Math.cos(r);
-      const pdx = Math.cos(r),
-        pdy = -Math.sin(r);
-      const xt = cx + adx * LEN,
-        yt = rootY + ady * LEN;
-      const xb = xt - adx * HEAD,
-        yb = yt - ady * HEAD;
+    const drawSectionArrow = (arrowX, direction) => {
+      if (!direction) return "";
+      const ARROW_LEN = 11,
+        HEAD_LEN = 4;
+      const angleDeg = H_DIR_ANGLE[direction];
+      const angleRad = (angleDeg * Math.PI) / 180;
+      const adx = Math.sin(angleRad),
+        ady = Math.cos(angleRad);
+      const pdx = Math.cos(angleRad),
+        pdy = -Math.sin(angleRad);
+      const tipX = arrowX + adx * ARROW_LEN,
+        tipY = arrowRootY + ady * ARROW_LEN;
+      const baseX = tipX - adx * HEAD_LEN,
+        baseY = tipY - ady * HEAD_LEN;
       return `
-        <line x1="${cx}" y1="${rootY}" x2="${(xt - adx * 2).toFixed(1)}" y2="${(yt - ady * 2).toFixed(1)}"
-          stroke="${col}" stroke-width="1.5" stroke-dasharray="3,2"/>
-        <path d="M${(xb - pdx * HEAD * 0.6).toFixed(1)},${(yb - pdy * HEAD * 0.6).toFixed(1)}
-                 L${xt.toFixed(1)},${yt.toFixed(1)}
-                 L${(xb + pdx * HEAD * 0.6).toFixed(1)},${(yb + pdy * HEAD * 0.6).toFixed(1)}"
-          fill="${col}"/>`;
+        <line x1="${arrowX}" y1="${arrowRootY}" x2="${(tipX - adx * 2).toFixed(1)}" y2="${(tipY - ady * 2).toFixed(1)}"
+          stroke="${arrowColor}" stroke-width="1.5" stroke-dasharray="3,2"/>
+        <path d="M${(baseX - pdx * HEAD_LEN * 0.6).toFixed(1)},${(baseY - pdy * HEAD_LEN * 0.6).toFixed(1)}
+                 L${tipX.toFixed(1)},${tipY.toFixed(1)}
+                 L${(baseX + pdx * HEAD_LEN * 0.6).toFixed(1)},${(baseY + pdy * HEAD_LEN * 0.6).toFixed(1)}"
+          fill="${arrowColor}"/>`;
     };
 
     const [leftDir, rightDir] = sides;
-    return `<svg viewBox="0 0 ${W} ${H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-      ${bodyRect}
-      ${arrow(mid / 2, leftDir)}
-      ${arrow(mid + mid / 2, rightDir)}
+    return `<svg viewBox="0 0 ${SVG_W} ${SVG_H}" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+      ${bodyHtml}
+      ${drawSectionArrow(midX / 2, leftDir)}
+      ${drawSectionArrow(midX + midX / 2, rightDir)}
     </svg>`;
   }
 
-  // ─── Presets ──────────────────────────────────────────────────────────────
+  // ─── Presets ───────────────────────────────────────────────────────────────
 
-  _presetKey(global) {
-    return global ? "kzb_presets_global" : `kzb_presets_${this._config.entity}`;
+  _presetKey(isGlobal) {
+    return isGlobal
+      ? "kzb_presets_global"
+      : `kzb_presets_${this._config.entity}`;
   }
 
   _loadPresets() {
-    const parse = (key) => {
-      try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
+    const parseFromStorage = (key) => {
+      try {
+        return JSON.parse(localStorage.getItem(key) || "[]");
+      } catch {
+        return [];
+      }
     };
-    const global = parse("kzb_presets_global").map(p => ({ ...p, _global: true }));
-    const local = parse(`kzb_presets_${this._config.entity}`);
-    return [...global, ...local];
+    const globalPresets = parseFromStorage("kzb_presets_global").map(
+      (preset) => ({ ...preset, _global: true }),
+    );
+    const localPresets = parseFromStorage(`kzb_presets_${this._config.entity}`);
+    return [...globalPresets, ...localPresets];
   }
 
   _savePreset(name, isGlobal) {
     if (!name.trim()) return;
     const key = this._presetKey(isGlobal);
-    const list = (() => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } })();
+    const existing = (() => {
+      try {
+        return JSON.parse(localStorage.getItem(key) || "[]");
+      } catch {
+        return [];
+      }
+    })();
     const preset = {
       name: name.trim(),
       hvac_mode: this._mode(),
@@ -761,9 +969,12 @@ class KazemBridgeCard extends HTMLElement {
       swing_mode: this._attr("swing_mode", "1"),
       swing_horizontal_mode: this._attr("swing_horizontal_mode", "both_center"),
     };
-    const idx = list.findIndex(p => p.name === preset.name);
-    if (idx >= 0) list[idx] = preset; else list.push(preset);
-    localStorage.setItem(key, JSON.stringify(list));
+    const existingIndex = existing.findIndex(
+      (savedPreset) => savedPreset.name === preset.name,
+    );
+    if (existingIndex >= 0) existing[existingIndex] = preset;
+    else existing.push(preset);
+    localStorage.setItem(key, JSON.stringify(existing));
     if (isGlobal) window.dispatchEvent(new CustomEvent("kzb-presets-changed"));
     this._savingPreset = false;
     this._render();
@@ -771,68 +982,99 @@ class KazemBridgeCard extends HTMLElement {
 
   _deletePreset(name, isGlobal) {
     const key = this._presetKey(isGlobal);
-    const list = (() => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } })();
-    localStorage.setItem(key, JSON.stringify(list.filter(p => p.name !== name)));
+    const existing = (() => {
+      try {
+        return JSON.parse(localStorage.getItem(key) || "[]");
+      } catch {
+        return [];
+      }
+    })();
+    localStorage.setItem(
+      key,
+      JSON.stringify(existing.filter((preset) => preset.name !== name)),
+    );
     if (isGlobal) window.dispatchEvent(new CustomEvent("kzb-presets-changed"));
     this._render();
   }
 
   _applyPreset(preset) {
-    const fields = ["hvac_mode", "temperature", "fan_mode", "swing_mode", "swing_horizontal_mode"];
-    fields.forEach(f => { if (preset[f] != null) this._queue(f, preset[f]); });
+    const fields = [
+      "hvac_mode",
+      "temperature",
+      "fan_mode",
+      "swing_mode",
+      "swing_horizontal_mode",
+    ];
+    fields.forEach((field) => {
+      if (preset[field] != null) this._queue(field, preset[field]);
+    });
   }
 
   _presetsHtml() {
     const presets = this._loadPresets();
-    const chips = presets.map(p => `
-      <span class="preset-chip">
-        <span class="preset-chip-name" data-preset-apply='${JSON.stringify(p)}'>${p.name}${p._global ? " (G)" : ""}</span>
-        <button class="preset-chip-del" data-preset-del="${p.name}" data-preset-global="${p._global ? "1" : "0"}" title="Delete">×</button>
-      </span>`).join("");
 
-    const form = this._savingPreset ? `
+    const chipsHtml = presets
+      .map(
+        (preset) => `
+      <span class="preset-chip">
+        <span class="preset-chip-name" data-preset-apply='${JSON.stringify(preset)}'>
+          ${preset.name}${preset._global ? ` <sup>${this._t("global_badge")}</sup>` : ""}
+        </span>
+        <button class="preset-chip-del"
+          data-preset-del="${preset.name}"
+          data-preset-global="${preset._global ? "1" : "0"}"
+          title="Delete">×</button>
+      </span>`,
+      )
+      .join("");
+
+    const formHtml = this._savingPreset
+      ? `
       <div class="preset-form">
-        <input type="text" id="preset-name" placeholder="Name…" maxlength="24"/>
-        <label><input type="radio" name="preset-scope" value="local" checked/> This AC</label>
-        <label><input type="radio" name="preset-scope" value="global"/> Global</label>
-        <button class="preset-form-confirm" id="preset-confirm">Save</button>
-        <button class="preset-form-cancel" id="preset-cancel">Cancel</button>
-      </div>` : "";
+        <input type="text" id="preset-name" placeholder="${this._t("preset_name_ph")}" maxlength="24"/>
+        <label><input type="radio" name="preset-scope" value="local" checked/> ${this._t("preset_this_ac")}</label>
+        <label><input type="radio" name="preset-scope" value="global"/> ${this._t("preset_global")}</label>
+        <button class="preset-form-confirm" id="preset-confirm">${this._t("preset_confirm")}</button>
+        <button class="preset-form-cancel"  id="preset-cancel">${this._t("preset_cancel")}</button>
+      </div>`
+      : "";
 
     return `
-      <div class="section-label">Presets</div>
-      ${form}
+      <div class="section-label">${this._t("presets")}</div>
+      ${formHtml}
       <div class="preset-row">
-        <button class="preset-save-btn" id="preset-save">+ Save</button>
-        ${chips}
+        <button class="preset-save-btn" id="preset-save">${this._t("preset_save")}</button>
+        ${chipsHtml}
       </div>`;
   }
 
-  // ─── Main render ──────────────────────────────────────────────────────────
+  // ─── Main render ───────────────────────────────────────────────────────────
 
   _render() {
     if (!this._hass || !this._config) return;
 
-    const state = this._state();
-    if (!state) {
+    const entityState = this._state();
+    if (!entityState) {
       this.shadowRoot.innerHTML = `<ha-card style="padding:16px;color:#f44">Entity not found: ${this._config.entity}</ha-card>`;
       return;
     }
 
-    const mode = this._mode();
+    const currentMode = this._mode();
     const isOn = this._isOn();
-    const accent = MODE_COLORS[mode] || "#7b68ee";
+    const accentColor = MODE_COLORS[currentMode] || "#7b68ee";
     const targetTemp = this._attr("temperature", 22);
     const fanMode = this._attr("fan_mode", "auto");
-    const swingMode = this._attr("swing_mode", "1");
-    const entrust = this._attr("preset_mode", "none") === "3d_auto";
-    const indoorT = this._sensorValue(this._config.indoor_sensor);
-    const outdoorT = this._sensorValue(this._config.outdoor_sensor);
-    const pending = this._isPending();
-    const hSwing = this._attr("swing_horizontal_mode", "normal");
+    const vSwingMode = this._attr("swing_mode", "1");
+    const hSwingMode = this._attr("swing_horizontal_mode", "normal");
+    const entrustOn = this._attr("preset_mode", "none") === "3d_auto";
+    const autoHeating = this._attr("auto_heating"); // 1 = frost protection active
+    const isPending = this._isPending();
+
+    const indoorTemp = this._sensorValue(this._config.indoor_sensor);
+    const outdoorTemp = this._sensorValue(this._config.outdoor_sensor);
 
     const tempDisplay = targetTemp.toFixed(1);
-    const tempDisabled = !isOn || mode === "fan_only";
+    const tempDisabled = !isOn || currentMode === "fan_only";
 
     const css = `
       :host { display: block; }
@@ -849,15 +1091,15 @@ class KazemBridgeCard extends HTMLElement {
       .title { font-size: 13px; color: #777; letter-spacing: 0.05em; }
       .header-right { display: flex; align-items: center; gap: 10px; }
       .power-btn {
-        background: ${isOn ? accent : "#333"}; border: none; border-radius: 50%;
+        background: ${isOn ? accentColor : "#333"}; border: none; border-radius: 50%;
         width: 36px; height: 36px; cursor: pointer; color: #fff;
         transition: background 0.3s; display: flex; align-items: center; justify-content: center;
       }
       .pending-dot {
         width: 8px; height: 8px; border-radius: 50%;
-        background: ${accent}; opacity: ${pending ? 1 : 0};
+        background: ${accentColor}; opacity: ${isPending ? 1 : 0};
         transition: opacity 0.3s;
-        animation: ${pending ? "pulse 1s infinite" : "none"};
+        animation: ${isPending ? "pulse 1s infinite" : "none"};
       }
       @keyframes pulse { 0%,100%{opacity:0.3} 50%{opacity:1} }
       .body { padding: 14px 18px; }
@@ -873,7 +1115,7 @@ class KazemBridgeCard extends HTMLElement {
         display: flex; flex-direction: column; align-items: center; gap: 2px;
         transition: background 0.2s, border-color 0.2s, color 0.2s; font-family: inherit;
       }
-      .mode-btn.active { background: ${accent}22; border-color: ${accent}; color: ${accent}; }
+      .mode-btn.active { background: ${accentColor}22; border-color: ${accentColor}; color: ${accentColor}; }
       .mode-icon { font-size: 17px; }
       .mode-label { font-size: 10px; }
       .temp-row {
@@ -888,7 +1130,7 @@ class KazemBridgeCard extends HTMLElement {
       }
       .temp-btn:active { background: #3a3a4a; }
       .temp-btn:disabled { opacity: 0.3; cursor: default; }
-      .temp-value { font-size: 42px; font-weight: 300; color: ${accent}; line-height: 1; text-align: center; }
+      .temp-value { font-size: 42px; font-weight: 300; color: ${accentColor}; line-height: 1; text-align: center; }
       .temp-unit { font-size: 13px; color: #555; text-align: center; }
       .vane-panels { display: flex; gap: 10px; margin-bottom: 12px; }
       .vane-panel { flex: 1; display: flex; flex-direction: column; align-items: center; }
@@ -910,12 +1152,17 @@ class KazemBridgeCard extends HTMLElement {
         transition: background 0.2s, border-color 0.2s, color 0.2s;
       }
       .fan-btn.active { background: #80cbc422; border-color: #80cbc4; color: #80cbc4; }
-      .extras-row { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; }
+      .extras-row { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
       .entrust-btn {
-        background: ${entrust ? "#7b68ee33" : "#2a2a3a"}; border: 1px solid ${entrust ? "#7b68ee" : "#333"};
+        background: ${entrustOn ? "#7b68ee33" : "#2a2a3a"}; border: 1px solid ${entrustOn ? "#7b68ee" : "#333"};
         border-radius: 8px; padding: 7px 12px; cursor: pointer;
-        color: ${entrust ? "#7b68ee" : "#666"}; font-size: 12px; font-family: inherit;
+        color: ${entrustOn ? "#7b68ee" : "#666"}; font-size: 12px; font-family: inherit;
         transition: background 0.2s, border-color 0.2s, color 0.2s;
+      }
+      .frost-badge {
+        background: #1a3a5c; border: 1px solid #4fc3f7;
+        border-radius: 8px; padding: 5px 10px;
+        color: #4fc3f7; font-size: 12px; pointer-events: none;
       }
       .sensor-row {
         display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid #2a2a3a;
@@ -938,9 +1185,7 @@ class KazemBridgeCard extends HTMLElement {
         background: #2a2a3a; border: 1px solid #3a3a4a; border-radius: 8px;
         padding: 5px 8px; font-size: 12px; font-family: inherit; color: #bbb;
       }
-      .preset-chip-name {
-        cursor: pointer; transition: color 0.2s;
-      }
+      .preset-chip-name { cursor: pointer; transition: color 0.2s; }
       .preset-chip-name:hover { color: #7b68ee; }
       .preset-chip-del {
         background: none; border: none; color: #444; cursor: pointer;
@@ -975,16 +1220,16 @@ class KazemBridgeCard extends HTMLElement {
       <style>${css}</style>
       <ha-card>
         <div class="header">
-          <div class="title">${state.attributes.friendly_name || this._config.entity}</div>
+          <div class="title">${entityState.attributes.friendly_name || this._config.entity}</div>
           <div class="header-right">
-            <div class="pending-dot" title="${pending ? "Updating…" : ""}"></div>
-            <button class="power-btn" id="pwr" title="${isOn ? "Turn off" : "Turn on"}">${POWER_SVG}</button>
+            <div class="pending-dot" title="${isPending ? this._t("updating") : ""}"></div>
+            <button class="power-btn" id="pwr" title="${isOn ? this._t("turn_off") : this._t("turn_on")}">${POWER_SVG}</button>
           </div>
         </div>
         <div class="body">
 
-          <div class="section-label">Mode</div>
-          <div class="mode-row">${this._modeButtons(mode)}</div>
+          <div class="section-label">${this._t("mode")}</div>
+          <div class="mode-row">${this._modeButtonsHtml(currentMode)}</div>
 
           <div class="temp-row">
             <button class="temp-btn" id="tm" ${tempDisabled ? "disabled" : ""}>−</button>
@@ -997,50 +1242,51 @@ class KazemBridgeCard extends HTMLElement {
 
           <div class="vane-panels">
             <div class="vane-panel">
-              <div class="section-label">Front view</div>
-              ${this._frontViewSvg(hSwing)}
+              <div class="section-label">${this._t("front_view")}</div>
+              ${this._frontViewSvg(hSwingMode)}
             </div>
             <div class="vane-panel">
-              <div class="section-label">Side view</div>
-              ${this._sideViewSvg(swingMode)}
+              <div class="section-label">${this._t("side_view")}</div>
+              ${this._sideViewSvg(vSwingMode)}
             </div>
           </div>
 
-          <div class="section-label">Vertical vane</div>
-          <div class="vane-row">${this._verticalVaneButtons(swingMode)}</div>
+          <div class="section-label">${this._t("vertical_vane")}</div>
+          <div class="vane-row">${this._verticalVaneButtonsHtml(vSwingMode)}</div>
 
-          <div class="section-label">Horizontal vane</div>
-          <div class="vane-row">${this._horizontalVaneButtons(hSwing)}</div>
+          <div class="section-label">${this._t("horizontal_vane")}</div>
+          <div class="vane-row">${this._horizontalVaneButtonsHtml(hSwingMode)}</div>
 
-          <div class="section-label">Fan speed</div>
-          <div class="fan-row">${this._fanButtons(fanMode)}</div>
+          <div class="section-label">${this._t("fan_speed")}</div>
+          <div class="fan-row">${this._fanButtonsHtml(fanMode)}</div>
 
           <div class="extras-row">
             <button class="entrust-btn" id="entrust" title="3D Auto — unit picks best airflow">
-              ✦ 3D Auto${entrust ? " ON" : ""}
+              ✦ ${this._t("entrust_3d_auto")}${entrustOn ? " ON" : ""}
             </button>
+            ${autoHeating ? `<span class="frost-badge" title="${this._t("frost_protection")}">❄ ${this._t("frost_protection")}</span>` : ""}
           </div>
 
           ${this._presetsHtml()}
 
           ${
-            indoorT !== null || outdoorT !== null
+            indoorTemp !== null || outdoorTemp !== null
               ? `
           <div class="sensor-row">
             ${
-              indoorT !== null
+              indoorTemp !== null
                 ? `<div class="sensor-chip">
-              <div class="s-label">Indoor</div>
-              <div class="s-val">${indoorT.toFixed(1)}</div>
+              <div class="s-label">${this._t("indoor")}</div>
+              <div class="s-val">${indoorTemp.toFixed(1)}</div>
               <div class="s-unit">°C</div>
             </div>`
                 : ""
             }
             ${
-              outdoorT !== null
+              outdoorTemp !== null
                 ? `<div class="sensor-chip">
-              <div class="s-label">Outdoor</div>
-              <div class="s-val">${outdoorT.toFixed(1)}</div>
+              <div class="s-label">${this._t("outdoor")}</div>
+              <div class="s-val">${outdoorTemp.toFixed(1)}</div>
               <div class="s-unit">°C</div>
             </div>`
                 : ""
@@ -1056,8 +1302,12 @@ class KazemBridgeCard extends HTMLElement {
     this._attachListeners();
   }
 
+  // ─── Event listeners ───────────────────────────────────────────────────────
+
   _attachListeners() {
     const root = this.shadowRoot;
+
+    // Header controls
     root
       .getElementById("pwr")
       ?.addEventListener("click", () =>
@@ -1074,50 +1324,72 @@ class KazemBridgeCard extends HTMLElement {
     root
       .getElementById("entrust")
       ?.addEventListener("click", () => this._toggleEntrust());
+
+    // Mode, vane and fan buttons
     root
       .querySelectorAll(".mode-btn")
-      .forEach((b) =>
-        b.addEventListener("click", () => this._setMode(b.dataset.mode)),
+      .forEach((button) =>
+        button.addEventListener("click", () =>
+          this._setMode(button.dataset.mode),
+        ),
       );
     root
       .querySelectorAll("[data-vswing]")
-      .forEach((b) =>
-        b.addEventListener("click", () => this._setSwing(b.dataset.vswing)),
+      .forEach((button) =>
+        button.addEventListener("click", () =>
+          this._setSwing(button.dataset.vswing),
+        ),
       );
     root
       .querySelectorAll("[data-hswing]")
-      .forEach((b) =>
-        b.addEventListener("click", () => this._setHSwing(b.dataset.hswing)),
+      .forEach((button) =>
+        button.addEventListener("click", () =>
+          this._setHSwing(button.dataset.hswing),
+        ),
       );
     root
       .querySelectorAll(".fan-btn")
-      .forEach((b) =>
-        b.addEventListener("click", () => this._setFan(b.dataset.fan)),
+      .forEach((button) =>
+        button.addEventListener("click", () =>
+          this._setFan(button.dataset.fan),
+        ),
       );
 
+    // Preset controls
     root.getElementById("preset-save")?.addEventListener("click", () => {
       this._savingPreset = !this._savingPreset;
       this._render();
     });
+
     root.getElementById("preset-confirm")?.addEventListener("click", () => {
       const name = root.getElementById("preset-name")?.value || "";
-      const isGlobal = root.querySelector("input[name=preset-scope]:checked")?.value === "global";
+      const isGlobal =
+        root.querySelector("input[name=preset-scope]:checked")?.value ===
+        "global";
       this._savePreset(name, isGlobal);
     });
+
     root.getElementById("preset-cancel")?.addEventListener("click", () => {
       this._savingPreset = false;
       this._render();
     });
-    root.querySelectorAll("[data-preset-apply]").forEach(el =>
-      el.addEventListener("click", () => {
-        try { this._applyPreset(JSON.parse(el.dataset.presetApply)); } catch {}
-      })
+
+    root.querySelectorAll("[data-preset-apply]").forEach((element) =>
+      element.addEventListener("click", () => {
+        try {
+          this._applyPreset(JSON.parse(element.dataset.presetApply));
+        } catch {}
+      }),
     );
-    root.querySelectorAll("[data-preset-del]").forEach(btn =>
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._deletePreset(btn.dataset.presetDel, btn.dataset.presetGlobal === "1");
-      })
+
+    root.querySelectorAll("[data-preset-del]").forEach((button) =>
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this._deletePreset(
+          button.dataset.presetDel,
+          button.dataset.presetGlobal === "1",
+        );
+      }),
     );
   }
 }

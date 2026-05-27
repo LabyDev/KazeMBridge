@@ -2,51 +2,87 @@
 
 Home Assistant custom integration for **Mitsubishi Heavy Industries ACs** with the **WF-RAC-HTTPS** Wi-Fi adapter. Controls the AC entirely over local Wi-Fi — no cloud, no account required.
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
+[![GitHub release](https://img.shields.io/github/v/release/LabyDev/KazeMBridge)](https://github.com/LabyDev/KazeMBridge/releases)
+
+---
+
 ## What it exposes
 
 | Entity | Type | Description |
 |---|---|---|
 | `climate.<name>` | Climate | On/off, modes (auto/cool/heat/fan/dry), temp 16–31 °C (0.5° steps), fan auto/1–4, vertical swing (swing + 4 positions), 3D Auto preset |
-| `select.<name>_horizontal_vane` | Select | Horizontal vane position: normal / both\_left / left\_center / both\_center / center\_right / both\_right / wide / swing |
-| `sensor.<name>_indoor_temperature` | Sensor | Indoor temperature (°C) — parsed from airconStat blob |
-| `sensor.<name>_outdoor_temperature` | Sensor | Outdoor temperature (°C) — parsed from airconStat blob |
+| `select.<name>_horizontal_vane` | Select | Horizontal vane: normal / both\_left / left\_center / both\_center / center\_right / both\_right / wide / swing |
+| `sensor.<name>_indoor_temperature` | Sensor | Indoor temperature (°C) — parsed from the airconStat blob |
+| `sensor.<name>_outdoor_temperature` | Sensor | Outdoor temperature (°C) — parsed from the airconStat blob |
 
-Extra state attributes on the climate entity: `wind_lr` (integer), `indoor_temp`, `outdoor_temp`, `led_stat`, `auto_heating`, `num_of_account`, `model_type`.
+Extra state attributes on the climate entity: `indoor_temp`, `outdoor_temp`, `auto_heating` (frost protection, read-only), `led_stat`, `num_of_account`, `model_type`.
+
+---
 
 ## Installation
 
-### Integration
+### Via HACS (recommended)
+
+1. Open HACS in Home Assistant.
+2. Go to **Integrations → ⋮ → Custom repositories**.
+3. Add `https://github.com/LabyDev/KazeMBridge` with category **Integration**.
+4. Click **Download** on the KazeMBridge card.
+5. Restart Home Assistant.
+
+### Manual
 
 1. Copy `integration/custom_components/kazembridge/` into your HA `config/custom_components/` directory.
 2. Restart Home Assistant.
-3. Go to **Settings → Integrations → Add Integration** and search for **KazeMBridge**.
-4. Enter the local IP address of your AC's Wi-Fi adapter.
 
-The integration auto-generates a UUID operator ID and registers it with the AC on first setup.
+### Setup
 
-### Lovelace card (optional)
+- Go to **Settings → Integrations → Add Integration** and search for **KazeMBridge**.
+- If your adapter is on the local network, Home Assistant may detect it automatically via **mDNS** and show a discovery notification — just confirm the IP address.
+- Or add it manually by entering the adapter's local IP address.
 
-A custom card with visual vane controls is included:
+The integration generates a UUID operator ID and registers it with the AC on first setup.
 
-1. Copy `lovelace/kazembridge-card.js` to your HA `config/www/` directory.
-2. In **Settings → Dashboards → Resources**, add `/local/kazembridge-card.js` (type: JavaScript module).
-3. Add a card to your dashboard:
+---
+
+## Lovelace card
+
+A custom Lovelace card with visual vane controls is bundled inside the integration and registered automatically — no manual resource installation needed.
 
 ```yaml
 type: custom:kazembridge-card
 entity: climate.mhi_ac
-indoor_sensor: sensor.mhi_ac_indoor_temperature   # optional
-outdoor_sensor: sensor.mhi_ac_outdoor_temperature # optional
+indoor_sensor: sensor.mhi_ac_indoor_temperature    # optional
+outdoor_sensor: sensor.mhi_ac_outdoor_temperature  # optional
 ```
 
-The card shows mode buttons, temperature control, a live side-profile vane SVG, vertical and horizontal vane selectors with visual louver icons, fan speed, and a 3D Auto toggle. Clicking any control updates the UI immediately (optimistic state) with a loading indicator while the AC confirms (~5 seconds).
+The card shows:
+- Mode buttons (Off / Auto / Cool / Heat / Fan / Dry)
+- Temperature control with optimistic UI (updates instantly, syncs to AC within ~5 s)
+- Animated vane diagrams — front view (horizontal airflow) and side view (vertical airflow)
+- Vertical and horizontal vane position selectors with visual louver icons
+- Fan speed selector
+- 3D Auto (Entrust) toggle
+- Frost Protection badge (read-only) — shown when the adapter reports `autoHeating = 1`
+- Presets — save/apply/delete named setting combinations, per-AC or global
+- Indoor and outdoor temperature chips (when sensor entities are configured)
+- Supports English and Dutch UI (follows your HA language setting)
 
-An example dashboard is at [`lovelace/dashboard.yaml`](lovelace/dashboard.yaml).
+---
+
+## Auto-discovery
+
+The WF-RAC adapter advertises itself on the local network as an mDNS service of type `_beaver._tcp.local.` Home Assistant detects this automatically when KazeMBridge is installed, and will show a notification in the Integrations panel. You only need to confirm the IP address — no manual search required.
+
+---
 
 ## Requirements
 
 - MHI AC with a **WF-RAC-HTTPS** Wi-Fi adapter reachable on your local network
-- The adapter's local IP address (recommended: assign a static DHCP lease via your router)
+- Home Assistant 2024.1.0 or newer
+- Recommended: assign a static DHCP lease to the adapter via your router
+
+---
 
 ## Repo structure
 
@@ -55,38 +91,47 @@ integration/
   custom_components/
     kazembridge/
       __init__.py       Entry point — sets up API, coordinator, platforms
-      manifest.json     Integration metadata
+      manifest.json     Integration metadata (includes zeroconf declaration)
+      hacs.json         HACS metadata
       const.py          Domain constants and mode/position mappings
-      config_flow.py    UI setup flow (enter IP, auto-register)
+      config_flow.py    UI setup flow (manual IP entry + mDNS auto-discovery)
       api.py            aiohttp HTTPS client for the device API
       coordinator.py    DataUpdateCoordinator — polls every 30 s
       mhi_codec.py      Binary blob encoder/decoder
       climate.py        ClimateEntity
       sensor.py         Indoor + outdoor temperature SensorEntity
       select.py         Horizontal vane SelectEntity
-lovelace/
-  kazembridge-card.js   Custom Lovelace card
-  dashboard.yaml        Example dashboard
+      translations/
+        en.json         English strings (config flow)
+        nl.json         Dutch strings (config flow)
+      www/
+        kazembridge-card.js   Custom Lovelace card (auto-registered)
 tools/
-  mhi_codec.py          Standalone CLI codec tool
+  mhi_codec.py    Standalone CLI codec — decode/encode blobs for debugging
 research/
-  research.md           Full reverse-engineered API documentation
+  research.md     Full reverse-engineered API and binary protocol documentation
 ```
 
-## CLI codec tool
+---
 
-`tools/mhi_codec.py` decodes and encodes `airconStat` blobs for debugging:
+## CLI codec tool
 
 ```bash
 python tools/mhi_codec.py
 ```
 
+Decodes a sample blob and shows a round-trip encode→decode result. Useful for verifying protocol changes before deploying.
+
+---
+
 ## How it works
 
 The WF-RAC adapter exposes a local HTTPS API on port 51443. All AC state is packed into a binary blob (`airconStat`) encoded as base64. The integration decodes this blob to read state and re-encodes it to send commands. See [`research/research.md`](research/research.md) for the full API and encoding documentation.
 
+---
+
 ## Known limitations
 
-- **Hi / Eco / Silent / Allergy / Night setback / Timers** — these features appear in the SmartM-Air app UI but are not part of the local binary protocol. They are not controllable via this integration.
-- **Horizontal vane** — exposed as a card-only control for now; HA's climate entity does not have a native horizontal swing attribute.
-- The AC takes approximately 5 seconds to apply a command and confirm the new state.
+- **Hi / Eco / Silent / Allergy / Night setback / Timers** — present in the SmartM-Air app but absent from the local binary protocol. Not controllable via this integration.
+- **Frost protection / LED / auto-heating** — readable from the local API but only writable via the cloud `setOptionSetting` endpoint. Shown as read-only attributes.
+- The AC takes approximately 5 seconds to apply a command and report the new state back.

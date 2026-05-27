@@ -1,108 +1,127 @@
-import base64, json
+"""Standalone CLI codec for the MHI WF-RAC airconStat blob.
 
-# --- Background: how numbers are stored in binary ---
+Run directly to decode a captured blob or encode a set of settings:
+
+    python tools/mhi_codec.py
+
+This file is kept identical to integration/custom_components/kazembridge/mhi_codec.py
+except for this docstring and the __main__ block at the bottom.
+The integration never imports from this file — it has its own copy.
+
+Blob layout after base64-decoding:
+
+    bytes  0–24  : command half  — the settings we last sent to the AC
+    bytes 25–49  : receive half  — what the AC is actually doing right now
+    bytes 50+    : sensor extension records (temperature readings, etc.)
+
+Each half is 18 bytes of settings + a trailer + a 2-byte CRC checksum.
+
+We always READ state from the RECEIVE half (starting at byte 25) because
+it reflects reality, not just our last command.
+
+The command half and receive half use DIFFERENT encodings for the same
+settings — do not mix them up. See the byte maps in encode() and decode().
+"""
+
+import base64
+import json
+
+
+# ─── Background: binary arithmetic ────────────────────────────────────────────
 #
-# Every number in a computer is stored as bits (0s and 1s).
-# A "byte" is 8 bits, so it can hold values 0–255.
-# "Hex" (base-16) is just a compact way to write binary: 0xFF = 255 = 11111111 in binary.
+# A "byte" holds 8 bits, so it can store values 0–255.  "Hex" (base-16) is a
+# compact notation: 0xFF = 255 = 0b11111111 in binary.
 #
 # Bit shifting:
-#   x >> 1  means "move all bits one place to the right" = divide by 2
-#   x << 1  means "move all bits one place to the left"  = multiply by 2
-#   Example: 0b00001100 >> 1 = 0b00000110  (12 >> 1 = 6)
+#   x >> 1  moves all bits one place right  = integer divide by 2
+#   x << 1  moves all bits one place left   = multiply by 2
 #
-# Bitwise AND (&):
-#   Compares two numbers bit by bit. Output bit is 1 only if BOTH input bits are 1.
-#   Used to isolate (mask) specific bits:
-#   Example: 0b10110110 & 0b00001111 = 0b00000110  (keeps only the lower 4 bits)
+# Bitwise AND (&) — isolate ("mask") specific bits:
+#   0b10110110 & 0b00001111 = 0b00000110   (keeps only the lower 4 bits)
 #
-# Bitwise XOR (^):
-#   Output bit is 1 if the two input bits are DIFFERENT, 0 if they are the same.
-#   Used heavily in checksums because it's a cheap way to detect changed bits.
+# Bitwise OR (|) — merge bits from two values:
+#   0b00000001 | 0b00000100 = 0b00000101
 #
-# Bitwise OR (|):
-#   Output bit is 1 if EITHER input bit is 1.
-#   Used to combine (merge) bits from two values.
+# Bitwise XOR (^) — 1 if the two input bits differ, 0 if they match.
+#   Used in checksums because flipping any bit produces a completely
+#   different output, making corruption easy to detect.
 
-# --- What is a CRC checksum? ---
+
+# ─── CRC-16/CCITT ─────────────────────────────────────────────────────────────
 #
-# When the AC receives a blob, it needs to know whether the bytes arrived
-# correctly and weren't corrupted. A checksum is a small number calculated
-# from all the bytes in the message. The sender calculates it and appends it;
-# the receiver recalculates it and checks it matches.
+# When the AC receives a blob it recalculates this checksum and rejects the
+# message if it doesn't match, catching any corruption in transit.
 #
-# CRC-16/CCITT is the specific algorithm the AC uses. It works by treating
-# the whole message as one very large binary number, then dividing it by a
-# fixed "magic number" called the polynomial (0x1021). The remainder of that
-# division is the checksum. If even one bit changes, the remainder changes too.
-#
+# The algorithm treats the whole message as a very large binary number and
+# divides it by the fixed polynomial 0x1021.  The remainder is the checksum.
 # The loop below does that division one bit at a time:
+#
 #   - Start with crc = 0xFFFF (all 1s) as the running remainder.
-#   - For each bit in the data, shift the remainder left by 1 (like long division)
-#     and if the bit we just dropped off the top doesn't match the incoming bit,
-#     XOR (mix in) the polynomial. That XOR step is equivalent to subtracting
-#     the polynomial in binary arithmetic, which is what long division does.
-#   - Whatever is left after processing every bit is the checksum.
+#   - For each bit in the data:
+#       1. Shift the remainder left by 1 (advancing one "digit" in the division).
+#       2. If the bit that dropped off the top differs from the incoming data bit,
+#          XOR the polynomial into the remainder.  This is the "subtract divisor"
+#          step in standard long division, done in binary.
+#   - Whatever remains after all bits is the checksum.
 #
 # Worked example — first two iterations processing byte 0x01 (0b00000001):
 #
 #   crc starts as: 1111111111111111  (0xFFFF)
 #
-#   i=7:  bit = (0x01 >> 7) & 1 = 0       ← bit 7 of 0x01 is 0
-#         top = (0xFFFF >> 15) & 1 = 1    ← top bit of crc is 1
-#         crc = 0xFFFF << 1 = 1111111111111110  (0xFFFE)
-#         bit ^ top = 0^1 = 1  → they differ, so apply polynomial:
-#         crc = 0xFFFE ^ 0x1021 = 1110111111011111  (0xEFDF)
+#   i=7:  data_bit = (0x01 >> 7) & 1 = 0       ← bit 7 of 0x01 is 0
+#         top_bit  = (0xFFFF >> 15) & 1 = 1    ← top bit of crc is 1
+#         crc = (0xFFFF << 1) & 0xFFFF = 0xFFFE
+#         data_bit ^ top_bit = 0^1 = 1 → they differ, apply polynomial:
+#         crc = 0xFFFE ^ 0x1021 = 0xEFDF
 #
-#   i=6:  bit = (0x01 >> 6) & 1 = 0       ← bit 6 of 0x01 is also 0
-#         top = (0xEFDF >> 15) & 1 = 1    ← top bit of 0xEFDF is still 1
-#         crc = 0xEFDF << 1 = 1101111110111110  (0xDFBE)
-#         bit ^ top = 1 → apply polynomial:
-#         crc = 0xDFBE ^ 0x1021 = 1100111110011111  (0xCF9F)
+#   i=6:  data_bit = (0x01 >> 6) & 1 = 0
+#         top_bit  = (0xEFDF >> 15) & 1 = 1
+#         crc = (0xEFDF << 1) & 0xFFFF = 0xDFBE
+#         crc = 0xDFBE ^ 0x1021 = 0xCF9F
 #
-#   ...this continues for all 8 bits of this byte, then repeats for every
-#   subsequent byte in the data. The final crc after all bytes is the checksum.
-#
-# To show why this catches corruption — flipping just one bit gives a
-# completely different result, which the AC will notice and reject.
+#   …continues for all 8 bits of each byte, then repeats for every byte.
 def crc16(data: bytes) -> int:
+    """Calculate CRC-16/CCITT checksum over the given bytes."""
     crc = 0xFFFF
     for byte in data:
-        for i in range(7, -1, -1):       # process each bit, starting from the most significant
-            bit = (byte >> i) & 1        # extract bit i from this byte (gives 0 or 1)
-            top = (crc >> 15) & 1        # extract the top bit of the running checksum
-            crc = (crc << 1) & 0xFFFF    # shift checksum left by 1, discard any overflow past 16 bits
-            if bit ^ top:                # if the incoming bit differs from the bit we just shifted out...
-                crc ^= 0x1021            # ...mix in the polynomial (the "division" step)
+        for bit_index in range(7, -1, -1):          # MSB first
+            data_bit = (byte >> bit_index) & 1      # extract one bit from this byte
+            top_bit  = (crc >> 15) & 1              # top bit of the running checksum
+            crc = (crc << 1) & 0xFFFF               # shift left, discard overflow past 16 bits
+            if data_bit ^ top_bit:                  # if bits differ, mix in the polynomial
+                crc ^= 0x1021
     return crc
 
-# Every half-blob must end with these exact 5 bytes before the checksum.
-# They were discovered by capturing real traffic from the AC; their meaning
-# is not documented but the AC rejects any blob that doesn't have them.
-TRAILER = bytes([0x01, 0xFF, 0xFF, 0xFF, 0xFF])
 
-# The full blob sent to/from the AC is built from two "halves".
-# Each half = 18 bytes of settings + 5 trailer bytes + 2 checksum bytes = 25 bytes total.
-# This function takes a raw 18-byte half, glues on the trailer and checksum,
-# and returns the finished 25-byte half.
-# The checksum is stored low-byte first (called "little-endian").
-def finalize(half: bytearray) -> bytes:
-    data = bytes(half) + TRAILER
-    crc = crc16(data)
-    return data + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+# ─── Blob finalisation ─────────────────────────────────────────────────────────
+#
+# Each 18-byte half gets these 5 "magic" trailer bytes appended before the CRC.
+# Their meaning is undocumented but the AC rejects any blob that omits them.
+_TRAILER = bytes([0x01, 0xFF, 0xFF, 0xFF, 0xFF])
 
-# --- Temperature lookup tables ---
+
+def _finalize_half(payload: bytearray) -> bytes:
+    """Append the fixed trailer + little-endian CRC to a raw 18-byte payload.
+
+    Returns the finished 25-byte half ready to be concatenated into the blob.
+    The CRC covers all 23 bytes (payload + trailer) and is stored low-byte first.
+    """
+    data_with_trailer = bytes(payload) + _TRAILER
+    checksum = crc16(data_with_trailer)
+    return data_with_trailer + bytes([checksum & 0xFF, (checksum >> 8) & 0xFF])
+
+
+# ─── Temperature lookup tables ─────────────────────────────────────────────────
 #
-# The AC doesn't send temperatures as plain numbers.
-# Instead it sends a single byte (0–255) which is an index into one of
-# these tables. To get the real temperature in °C, look up that index.
+# The AC does not send temperatures as plain numbers. It sends a single byte
+# (0–255) which is an index into one of these tables. Look up the index to get
+# the real temperature in °C.
 #
-# Example: if the AC sends index 150 for indoor temp,
-#   INDOOR_TEMP[150] = 25.2°C
+# Example: if the AC sends index 150 for indoor temp, INDOOR_TEMP[150] = 22.7°C.
 #
-# The tables were copied exactly from the official Android app source code.
-# Values at the very low end repeat (e.g. many entries are -30.0) because
-# the sensor can't measure below a certain point and just stays pinned there.
+# These tables are copied verbatim from the official Android app (arrays.xml).
+# The low end repeats (e.g. many entries are −30.0) because the sensor clamps
+# there when the temperature is below its measurable range.
 INDOOR_TEMP = [
     -30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,-30.0,
     -29.0,-28.0,-27.0,-26.0,-25.0,-24.0,-23.0,-22.5,-22.0,-21.0,-20.0,-19.5,-19.0,-18.0,-17.5,-17.0,
@@ -141,206 +160,255 @@ OUTDOOR_TEMP = [
     38.0,38.3,38.6,39.0,39.3,39.6,40.0,40.3,40.6,41.0,41.3,41.6,42.0,42.3,42.6,43.0,
 ]
 
-# --- What is the "blob"? ---
-#
-# The AC communicates its state as one big chunk of bytes called a "blob".
-# It travels over the network encoded as base64, which is a way of turning
-# arbitrary bytes into plain text characters so they can be sent in an HTTP request.
-#
-# After decoding from base64, the blob has this structure:
-#
-#   bytes  0–24  : "command half"  — what we last told the AC to do
-#   bytes 25–49  : "receive half"  — what the AC is actually doing right now
-#   bytes 50+    : optional sensor records (temperature readings, etc.)
-#
-# Each half is 18 bytes of settings + 5 trailer bytes + 2 checksum bytes = 25 bytes.
-#
-# We read the AC's current state from the RECEIVE half (starting at byte 25)
-# because it reflects reality, not just our last command.
-#
-# Inside the 18-byte receive payload, each byte (or even individual bits within
-# a byte) controls one setting. Here's the map:
-#
-#   r[2]  — packed byte containing:
-#             bit 0       : power  (1 = ON, 0 = OFF)
-#             bits 4,3,2  : mode   (0x00=auto, 0x08=cool, 0x10=heat, 0x0C=fan, 0x04=dry)
-#             bit 6       : vertical swing is active
-#   r[3]  — packed byte containing:
-#             bits 3,2,1,0 : fan speed  (0x07=auto, 0x00=speed1 … 0x06=speed4)
-#             bits 5,4     : vertical position when not swinging (0x00/0x10/0x20/0x30 = pos 1–4)
-#   r[4]  — temperature setpoint raw value; divide by 2 to get °C
-#             (e.g. raw value 44 → 44 * 0.5 = 22.0°C)
-#   r[11] — horizontal position (stored as 0-based index; add 1 to display)
-#   r[12] — packed byte containing:
-#             bit 0 : horizontal swing is active
-#             bit 2 : "entrust" mode (the AC controls everything automatically)
 
-def decode(b64: str) -> dict:
-    # base64 decode the blob into raw bytes, stripping any line breaks first
-    raw = base64.b64decode(b64.replace('\n', ''))
+# ─── Decode ────────────────────────────────────────────────────────────────────
 
-    c = raw[:18]              # command half payload (18 bytes; not used here)
-    R_OFF = 25                # receive half starts at byte 25
-    r = raw[R_OFF:R_OFF + 18] # raw[25:43] — bytes 25,26,...,42 (start inclusive, end exclusive)
+def decode(base64_blob: str) -> dict:
+    """Decode a base64 airconStat blob into a plain Python dict.
 
-    # After the receive half's 18 bytes comes a count byte, then that many
-    # sensor records. Each record is 4 bytes: [type_code, sub_code, value, padding].
-    # We scan for the indoor and outdoor temperature records by their type codes.
-    count_byte = raw[R_OFF + 18]   # how many sensor records follow
-    indoor_temp = outdoor_temp = None
-    for i in range(count_byte):
-        base = R_OFF + 19 + i * 4              # start of this record, skip 4 bytes per sensor to grab starting byte.
-        code, sub, val = raw[base], raw[base + 1], raw[base + 2]
-        if code == 0x80 and sub == 0x20:       # 0x80/0x20 = indoor temp record
-            indoor_temp = INDOOR_TEMP[val]     # val is an index into the lookup table
-        elif code == 0x80 and sub == 0x10:     # 0x80/0x10 = outdoor temp record
-            outdoor_temp = OUTDOOR_TEMP[val]
+    Reads exclusively from the RECEIVE half (bytes 25–42) because it
+    reflects what the AC is actually doing, not what we last commanded.
 
-    # Extract each setting by masking the relevant bits out of the packed bytes.
-    # & with a mask zeroes out all bits we don't care about, leaving only the ones we want.
-    operation = 'ON' if (r[2] & 0x01) else 'OFF'   # isolate bit 0 of r[2]
+    Sensor extension tuples (temperature readings) are parsed from the
+    variable-length section that follows the receive half's 18-byte payload.
 
-    MODE_MAP_R = {0x00:'auto', 0x08:'cool', 0x10:'heat', 0x0C:'fan', 0x04:'dry'}
-    mode = MODE_MAP_R.get(r[2] & 0x1C, f'?0x{r[2]&0x1C:02x}')   # 0x1C = 0b00011100 isolates bits 4,3,2
+    Returns a dict with keys:
+        operation     : bool — True = on
+        mode          : int  — 0=auto 1=cool 2=heat 3=fan 4=dry
+        temp_setpoint : float — °C
+        fan           : int  — 0=auto 1-4=speeds
+        wind_ud       : int  — 0=swing 1-4=positions
+        wind_lr       : int  — 0=swing 1-7=positions
+        entrust       : bool — True = 3D auto mode
+        model_type    : int  — 0=Separate2021 1=Global2022 2=HighEndJP2023 …
+        indoor_temp   : float | None
+        outdoor_temp  : float | None
+    """
+    raw_bytes = base64.b64decode(base64_blob.replace('\n', ''))
 
-    vert_swing = bool(r[2] & 0x40)   # 0x40 = 0b01000000, isolates bit 6
+    # The receive half starts at byte 25 and its settings payload is 18 bytes.
+    RECEIVE_HALF_OFFSET = 25
+    receive_half = raw_bytes[RECEIVE_HALF_OFFSET : RECEIVE_HALF_OFFSET + 18]
 
-    FAN_MAP_R = {0x07:'auto', 0x00:'1', 0x01:'2', 0x02:'3', 0x06:'4'}
-    fan = FAN_MAP_R.get(r[3] & 0x0F, f'?0x{r[3]&0x0F:02x}')   # 0x0F = lower 4 bits
+    # ── Sensor extension records ────────────────────────────────────────────
+    # Immediately after the 18-byte receive payload comes a count byte, then
+    # that many 4-byte sensor records: [type_code, sub_code, value, 0xFF].
+    # We scan for temperature records by their type + sub_code combination.
+    sensor_record_count = raw_bytes[RECEIVE_HALF_OFFSET + 18]
+    indoor_temp = None
+    outdoor_temp = None
+    for sensor_index in range(sensor_record_count):
+        record_offset  = RECEIVE_HALF_OFFSET + 19 + sensor_index * 4
+        record_type    = raw_bytes[record_offset]
+        record_subtype = raw_bytes[record_offset + 1]
+        raw_value      = raw_bytes[record_offset + 2]
+        if record_type == 0x80 and record_subtype == 0x20:   # indoor temperature
+            indoor_temp = INDOOR_TEMP[raw_value]
+        elif record_type == 0x80 and record_subtype == 0x10: # outdoor temperature
+            outdoor_temp = OUTDOOR_TEMP[raw_value]
 
-    VPOS_MAP_R = {0x00:'1', 0x10:'2', 0x20:'3', 0x30:'4'}
-    wind_ud = 'swing' if vert_swing else VPOS_MAP_R.get(r[3] & 0x30, f'?0x{r[3]&0x30:02x}')
+    # ── Receive half byte map ───────────────────────────────────────────────
+    #
+    # receive_half[0]  — model type (same constants as command half byte 0)
+    # receive_half[2]  — packed: bit0=power, bits2-4=mode, bit6=vertical swing active
+    # receive_half[3]  — packed: bits0-3=fan speed, bits4-7=vertical position
+    # receive_half[4]  — temperature setpoint raw (divide by 2 for °C, no +128 offset)
+    # receive_half[11] — horizontal position (0-based; command half is 1-based)
+    # receive_half[12] — packed: bit0=horizontal swing active, bit2=entrust (3D auto)
+    #
+    # The receive half uses DIFFERENT bit values than the command half for
+    # operation, mode, fan speed, and positions. Never use command-half
+    # constants to decode the receive half.
 
-    horiz_swing = bool(r[12] & 0x01)
-    wind_lr = 'swing' if horiz_swing else str(r[11] + 1)   # stored 0-based, display 1-based
+    # Byte 0 — model type; bit 7 is a status flag, model ID is bits 0-6.
+    model_type = receive_half[0] & 0x7F
 
-    temp = r[4] * 0.5   # raw value encodes temp in 0.5°C steps
-    entrust = bool(r[12] & 0x04)
+    # Byte 2, bit 0 — power (1=ON, 0=OFF).
+    is_on = bool(receive_half[2] & 0x01)
+
+    # Byte 2, bits 2-4 — operation mode.
+    # 0x1C = 0b00011100 isolates bits 4, 3, 2.
+    RECEIVE_MODE_MAP = {0x00: 0, 0x08: 1, 0x10: 2, 0x0C: 3, 0x04: 4}
+    mode = RECEIVE_MODE_MAP.get(receive_half[2] & 0x1C, 0)
+
+    # Byte 2, bit 6 — vertical swing.  0x40 = 0b01000000.
+    vertical_swing_active = bool(receive_half[2] & 0x40)
+
+    # Byte 3, bits 0-3 — fan speed.  0x0F isolates the lower nibble.
+    RECEIVE_FAN_MAP = {0x07: 0, 0x00: 1, 0x01: 2, 0x02: 3, 0x06: 4}
+    fan_speed = RECEIVE_FAN_MAP.get(receive_half[3] & 0x0F, 0)
+
+    # Byte 3, bits 4-7 — vertical vane position (when swing is off).
+    # 0x30 = 0b00110000 isolates bits 5 and 4.
+    RECEIVE_VPOS_MAP = {0x00: 1, 0x10: 2, 0x20: 3, 0x30: 4}
+    vertical_position = 0 if vertical_swing_active else RECEIVE_VPOS_MAP.get(receive_half[3] & 0x30, 1)
+
+    # Byte 4 — temperature setpoint.  No +128 offset here (only in command half).
+    temp_setpoint = receive_half[4] * 0.5
+
+    # Byte 11 — horizontal position, stored 0-based in receive half.
+    # Byte 12, bit 0 — horizontal swing.
+    horizontal_swing_active = bool(receive_half[12] & 0x01)
+    horizontal_position = 0 if horizontal_swing_active else receive_half[11] + 1
+
+    # Byte 12, bit 2 — entrust / 3D auto mode.
+    entrust_active = bool(receive_half[12] & 0x04)
 
     return {
-        'operation'    : operation,
-        'mode'         : mode,
-        'temp_setpoint': f'{temp:.1f}°C',
-        'fan'          : fan,
-        'wind_ud'      : wind_ud,
-        'wind_lr'      : wind_lr,
-        'entrust'      : entrust,
-        'indoor_temp'  : f'{indoor_temp:.1f}°C' if indoor_temp  is not None else '(not in blob)',
-        'outdoor_temp' : f'{outdoor_temp:.1f}°C' if outdoor_temp is not None else '(not in blob)',
+        "operation":     is_on,
+        "mode":          mode,
+        "temp_setpoint": temp_setpoint,
+        "fan":           fan_speed,
+        "wind_ud":       vertical_position,
+        "wind_lr":       horizontal_position,
+        "entrust":       entrust_active,
+        "model_type":    model_type,
+        "indoor_temp":   indoor_temp,
+        "outdoor_temp":  outdoor_temp,
     }
 
-# --- Why are there two halves (command and receive)? ---
+
+# ─── Encode ────────────────────────────────────────────────────────────────────
 #
-# The AC protocol uses two parallel representations of the same settings.
-# The "command half" uses one set of bit layouts, and the "receive half" uses
-# a different set — same information, different encoding.
-# The AC validates both and rejects the blob if they disagree.
-# This is likely a redundancy check built into the original protocol design.
+# Why are there two halves (command and receive)?
 #
-# This function always builds a completely fresh blob from scratch.
-# It does NOT read an existing blob and patch it — it fills in two empty
-# 18-byte arrays and sets every relevant bit from the parameters you pass in.
-def encode(operation: int, mode: int, temp: float,
-           fan: int, wind_ud: int, wind_lr: int = 1) -> str:
+# The AC protocol uses two parallel representations of the same settings with
+# different bit layouts.  The AC validates both and rejects the blob if they
+# disagree — this is a redundancy check built into the protocol.
+#
+# This function always builds a completely fresh blob from scratch using two
+# empty 18-byte arrays.  It does NOT read an existing blob and patch it.
+# That approach avoids accidentally preserving stale bits from a previous state.
+
+def encode(
+    operation: int,
+    mode: int,
+    temp: float,
+    fan: int,
+    wind_ud: int,
+    wind_lr: int = 1,
+    entrust: int = 0,
+    model_type: int = 0,
+) -> str:
+    """Encode AC settings into a base64 airconStat blob.
+
+    Parameters
+    ----------
+    operation  : 1 = ON, 0 = OFF
+    mode       : 0=auto 1=cool 2=heat 3=fan_only 4=dry
+    temp       : setpoint °C, 16.0–31.0 in 0.5° steps
+                 (fan_only forces 25.0 regardless of this value)
+    fan        : 0=auto 1-4=speeds
+    wind_ud    : 0=swing 1-4=fixed positions (top to bottom)
+    wind_lr    : 0=swing 1-7=fixed positions (left to right)
+    entrust    : 1 = 3D auto mode on, 0 = off
+    model_type : adapter model constant (0=Separate2021, 1=Global2022, …)
+                 Read from the last receive half and echoed back so the AC
+                 recognises its own model.  The command half byte 0 is always
+                 0x00 regardless of model (per protocol spec).
+
+    Returns
+    -------
+    str — base64-encoded blob ready to send to setAirconStat.
     """
-    operation : 1=ON  0=OFF
-    mode      : 0=auto 1=cool 2=heat 3=fan 4=dry
-    temp      : setpoint °C (16.0-31.0 in 0.5 steps)
-    fan       : 0=auto 1-4=speeds
-    wind_ud   : 0=swing 1-4=positions
-    wind_lr   : 0=swing 1-7=positions
-    """
-    # These dicts map from our simple 0–4 integers to the actual byte values
-    # the AC expects in each half. The two halves use completely different codes
-    # for the same settings, so there are separate tables for each.
-    MODES_C = {0:0x20, 1:0x28, 2:0x30, 3:0x2C, 4:0x24}   # command half mode codes
-    MODES_R = {0:0x00, 1:0x08, 2:0x10, 3:0x0C, 4:0x04}   # receive half mode codes
-    FAN_C   = {0:0x0F, 1:0x08, 2:0x09, 3:0x0A, 4:0x0E}
-    FAN_R   = {0:0x07, 1:0x00, 2:0x01, 3:0x02, 4:0x06}
 
-    # Fan-only mode doesn't have a meaningful temperature, so the AC requires
-    # exactly 25.0°C to be sent. Any other value causes it to behave oddly.
-    tval = 25.0 if mode == 3 else temp
+    # ── Command half encoding tables ────────────────────────────────────────
+    COMMAND_MODE_MAP = {0: 0x20, 1: 0x28, 2: 0x30, 3: 0x2C, 4: 0x24}
+    COMMAND_FAN_MAP  = {0: 0x0F, 1: 0x08, 2: 0x09, 3: 0x0A, 4: 0x0E}
 
-    # --- Build the command half ---
-    # bytearray(18) creates 18 zero bytes we can fill in.
-    # c[5] = 0xFF is a fixed marker byte required by the protocol.
-    # We use |= (OR-assign) to set bits without clearing the ones already set.
-    c = bytearray(18); c[5] = 0xFF
+    # Fan-only mode has no meaningful temperature concept.  The AC requires
+    # exactly 25.0°C in that case; any other value produces odd behaviour.
+    effective_temp = 25.0 if mode == 3 else temp
 
-    # Set power bit: 0x03 = binary 11 (ON sets both bits 0 and 1), 0x02 = binary 10 (OFF)
-    c[2] |= 0x03 if operation else 0x02
-    c[2] |= MODES_C[mode]   # merge the mode bits into the same byte
-    c[3] |= FAN_C[fan]
+    # ── Build the command half ──────────────────────────────────────────────
+    command_half = bytearray(18)
+    command_half[5] = 0xFF   # fixed protocol marker; byte 0 stays 0x00 for all models
 
-    # Vertical swing: 0xC0 = binary 11000000 sets bits 7 and 6 (swing on)
-    # No swing: 0x80 = binary 10000000 sets only bit 7, then OR in the position code
-    if wind_ud == 0:
-        c[2] |= 0xC0
-        c[3] |= 0x80
+    # Byte 2 — power (bits 0-1).
+    command_half[2] |= 0x03 if operation else 0x02
+    command_half[2] |= COMMAND_MODE_MAP[mode]
+    command_half[3] |= COMMAND_FAN_MAP[fan]
+
+    # Vertical vane — the AC requires a position value even when swing is ON.
+    if wind_ud == 0:   # swing
+        command_half[2] |= 0xC0
+        command_half[3] |= 0x80   # position 1 alongside swing-on (required by AC)
     else:
-        c[2] |= 0x80
-        c[3] |= {1:0x80, 2:0x90, 3:0xA0, 4:0xB0}[wind_ud]
+        COMMAND_VPOS_MAP = {1: 0x80, 2: 0x90, 3: 0xA0, 4: 0xB0}
+        command_half[2] |= 0x80
+        command_half[3] |= COMMAND_VPOS_MAP[wind_ud]
 
-    # Horizontal swing: set bits in c[12] and a base value in c[11]
-    # No swing: c[11] gets a position offset (0x10 base + 0–6 for positions 1–7)
-    if wind_lr == 0:
-        c[12] |= 0x03
-        c[11] |= 0x10
+    # Horizontal vane — same "position required alongside swing" rule.
+    if wind_lr == 0:   # swing
+        command_half[12] |= 0x03
+        command_half[11] |= 0x10   # position 1 alongside swing-on (required by AC)
     else:
-        c[12] |= 0x02
-        c[11] |= {1:0x10,2:0x11,3:0x12,4:0x13,5:0x14,6:0x15,7:0x16}[wind_lr]
+        COMMAND_HPOS_MAP = {1: 0x10, 2: 0x11, 3: 0x12, 4: 0x13, 5: 0x14, 6: 0x15, 7: 0x16}
+        command_half[12] |= 0x02
+        command_half[11] |= COMMAND_HPOS_MAP[wind_lr]
 
-    c[12] |= 0x08   # fixed flag bit required in the command half
+    # Entrust (3D auto).  Command half: 0x0C = on, 0x08 = off.
+    command_half[12] |= 0x0C if entrust else 0x08
 
-    # Temperature: multiply °C by 2 (since each step is 0.5°C), then add 128.
-    # The +128 offset is specific to the command half; the receive half doesn't use it.
-    c[4] = int(tval / 0.5) + 128
+    # Temperature: multiply °C by 2 (one step = 0.5°C), then add 128.
+    command_half[4] = int(effective_temp / 0.5) + 128
 
-    # --- Build the receive half ---
-    # Same settings, different bit layouts. See the decode() comments above for the map.
-    r = bytearray(18); r[5] = 0xFF
+    # ── Build the receive half ──────────────────────────────────────────────
+    RECEIVE_MODE_MAP = {0: 0x00, 1: 0x08, 2: 0x10, 3: 0x0C, 4: 0x04}
+    RECEIVE_FAN_MAP  = {0: 0x07, 1: 0x00, 2: 0x01, 3: 0x02, 4: 0x06}
 
-    r[2] |= 0x01 if operation else 0x00   # power is just bit 0 here (no second bit)
-    r[2] |= MODES_R[mode]
-    r[3] |= FAN_R[fan]
+    receive_half = bytearray(18)
+    receive_half[5] = 0xFF
+    receive_half[0] = model_type   # echoed from the last known receive half
+
+    receive_half[2] |= 0x01 if operation else 0x00
+    receive_half[2] |= RECEIVE_MODE_MAP[mode]
+    receive_half[3] |= RECEIVE_FAN_MAP[fan]
 
     if wind_ud == 0:
-        r[2] |= 0x40   # bit 6 = swing active
+        receive_half[2] |= 0x40   # bit 6 = vertical swing active
     else:
-        r[3] |= {1:0x00, 2:0x10, 3:0x20, 4:0x30}[wind_ud]   # upper nibble of r[3]
+        RECEIVE_VPOS_MAP = {1: 0x00, 2: 0x10, 3: 0x20, 4: 0x30}
+        receive_half[3] |= RECEIVE_VPOS_MAP[wind_ud]
 
     if wind_lr == 0:
-        r[12] |= 0x01   # bit 0 = horizontal swing active
+        receive_half[12] |= 0x01   # bit 0 = horizontal swing active
     else:
-        r[11] |= (wind_lr - 1)   # 0-based index (position 1 → 0, position 7 → 6)
+        receive_half[11] |= wind_lr - 1   # 0-based: position 1 → 0, position 7 → 6
 
-    r[4] = int(tval / 0.5)   # no +128 offset in the receive half
+    # Entrust.  Receive half: 0x04 = on, 0x00 = off (different from command half).
+    receive_half[12] |= 0x04 if entrust else 0x00
 
-    # Finalize both halves (append trailer + checksum), concatenate them,
-    # then base64-encode the result into a plain text string.
-    return base64.b64encode(finalize(c) + finalize(r)).decode()
+    # Temperature: no +128 offset in the receive half.
+    receive_half[4] = int(effective_temp / 0.5)
+
+    encoded_blob = base64.b64encode(_finalize_half(command_half) + _finalize_half(receive_half))
+    return encoded_blob.decode()
 
 
 if __name__ == '__main__':
-    blob = "AACij6r/AAAAAAATigAAAAAAAf////8ZR4EEAAcqogAAiAAAAwAAAAAAAAOAIKL/gBDP/5QQAAA2cg=="
+    # ── Decode example ──────────────────────────────────────────────────────
+    # Paste a real blob captured from the device here to inspect its state.
+    sample_blob = "AACij6r/AAAAAAATigAAAAAAAf////8ZR4EEAAcqogAAiAAAAwAAAAAAAAOAIKL/gBDP/5QQAAA2cg=="
     print("=== decode ===")
-    print(json.dumps(decode(blob), indent=2))
+    print(json.dumps(decode(sample_blob), indent=2))
 
+    # ── Encode example ──────────────────────────────────────────────────────
     # encode(operation, mode, temp, fan, wind_ud, wind_lr)
     #
     # operation : 1=ON, 0=OFF
-    # mode      : 0=auto, 1=cool, 2=heat, 3=fan, 4=dry
-    # temp      : 16.0–31.0 in 0.5 steps (ignored in fan mode, forced to 25.0)
+    # mode      : 0=auto, 1=cool, 2=heat, 3=fan_only, 4=dry
+    # temp      : 16.0–31.0 in 0.5° steps (ignored for fan_only, forced to 25.0)
     # fan       : 0=auto, 1=slow, 2=med-slow, 3=med-fast, 4=fast
-    # wind_ud   : 0=swing, 1=top, 2=mid-top, 3=mid-bot, 4=bottom
-    # wind_lr   : 0=swing, 1–7=positions left to right
+    # wind_ud   : 0=swing, 1=top, 2=mid-top, 3=mid-bottom, 4=bottom
+    # wind_lr   : 0=swing, 1-7=positions left to right
     #
     # Examples:
     #   encode(1, 0, 21.0, 0, 0, 0)   # ON, auto, 21°C, fan auto, both swing
     #   encode(0, 0, 21.0, 0, 0, 0)   # OFF, everything else same
-    #   encode(1, 1, 22.0, 2, 3, 0)   # ON, cool, 22°C, fan med-slow, vert mid-bot, horiz swing
+    #   encode(1, 1, 22.0, 2, 3, 0)   # ON, cool, 22°C, fan med-slow, vert mid-bottom, horiz swing
     #   encode(1, 2, 20.0, 1, 4, 4)   # ON, heat, 20°C, fan slow, vert bottom, horiz pos 4
-    b64 = encode(operation=1, mode=0, temp=21.0, fan=0, wind_ud=1, wind_lr=4)
-    print(b64)
-    print(json.dumps(decode(b64), indent=2))
+    print("\n=== encode -> decode round-trip ===")
+    encoded_blob = encode(operation=1, mode=0, temp=21.0, fan=0, wind_ud=1, wind_lr=4)
+    print(encoded_blob)
+    print(json.dumps(decode(encoded_blob), indent=2))

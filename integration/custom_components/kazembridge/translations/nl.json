@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "KazeMBridge — MHI WF-RAC",
+        "description": "Voer het lokale IP-adres in van uw MHI WF-RAC Wi-Fi adapter.",
+        "data": {
+          "host": "IP-adres"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken met het apparaat. Controleer het IP-adres en of de adapter op uw lokale netwerk is aangesloten.",
+      "operator_list_full": "De lijst met AC-operators is vol. Reset de Wi-Fi module via de knopcombinatie op de afstandsbediening (zie uw AC-handleiding) om de lijst te wissen en probeer opnieuw.",
+      "register_failed": "Registratie bij de AC mislukt.",
+      "unknown": "Onverwachte fout. Controleer de logs."
+    },
+    "abort": {
+      "already_configured": "Dit apparaat is al geconfigureerd."
+    }
+  }
+}
