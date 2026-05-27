@@ -121,12 +121,16 @@ class KazemBridgeCard extends HTMLElement {
     this._hTargets = null;
     this._rafId = null;
     this._lastRafTs = null;
+    this._savingPreset = false;
   }
 
   connectedCallback() {
     this._triggerPoll();
     this._pollInterval = setInterval(() => this._triggerPoll(), 4000);
     this._startRaf();
+    this._onGlobalPresets = () => this._render();
+    window.addEventListener("kzb-presets-changed", this._onGlobalPresets);
+    window.addEventListener("storage", this._onGlobalPresets);
   }
 
   disconnectedCallback() {
@@ -135,6 +139,8 @@ class KazemBridgeCard extends HTMLElement {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
+    window.removeEventListener("kzb-presets-changed", this._onGlobalPresets);
+    window.removeEventListener("storage", this._onGlobalPresets);
   }
 
   _startRaf() {
@@ -487,7 +493,7 @@ class KazemBridgeCard extends HTMLElement {
       VB_H = 105;
     const BW = 68,
       BH = 30,
-      BX = VB_W - BW - 4,
+      BX = VB_W - BW - 36,
       BY = 6;
     const VX = BX,
       VY = BY + BH;
@@ -728,6 +734,80 @@ class KazemBridgeCard extends HTMLElement {
     </svg>`;
   }
 
+  // ─── Presets ──────────────────────────────────────────────────────────────
+
+  _presetKey(global) {
+    return global ? "kzb_presets_global" : `kzb_presets_${this._config.entity}`;
+  }
+
+  _loadPresets() {
+    const parse = (key) => {
+      try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
+    };
+    const global = parse("kzb_presets_global").map(p => ({ ...p, _global: true }));
+    const local = parse(`kzb_presets_${this._config.entity}`);
+    return [...global, ...local];
+  }
+
+  _savePreset(name, isGlobal) {
+    if (!name.trim()) return;
+    const key = this._presetKey(isGlobal);
+    const list = (() => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } })();
+    const preset = {
+      name: name.trim(),
+      hvac_mode: this._mode(),
+      temperature: this._attr("temperature", 22),
+      fan_mode: this._attr("fan_mode", "auto"),
+      swing_mode: this._attr("swing_mode", "1"),
+      swing_horizontal_mode: this._attr("swing_horizontal_mode", "both_center"),
+    };
+    const idx = list.findIndex(p => p.name === preset.name);
+    if (idx >= 0) list[idx] = preset; else list.push(preset);
+    localStorage.setItem(key, JSON.stringify(list));
+    if (isGlobal) window.dispatchEvent(new CustomEvent("kzb-presets-changed"));
+    this._savingPreset = false;
+    this._render();
+  }
+
+  _deletePreset(name, isGlobal) {
+    const key = this._presetKey(isGlobal);
+    const list = (() => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } })();
+    localStorage.setItem(key, JSON.stringify(list.filter(p => p.name !== name)));
+    if (isGlobal) window.dispatchEvent(new CustomEvent("kzb-presets-changed"));
+    this._render();
+  }
+
+  _applyPreset(preset) {
+    const fields = ["hvac_mode", "temperature", "fan_mode", "swing_mode", "swing_horizontal_mode"];
+    fields.forEach(f => { if (preset[f] != null) this._queue(f, preset[f]); });
+  }
+
+  _presetsHtml() {
+    const presets = this._loadPresets();
+    const chips = presets.map(p => `
+      <span class="preset-chip">
+        <span class="preset-chip-name" data-preset-apply='${JSON.stringify(p)}'>${p.name}${p._global ? " (G)" : ""}</span>
+        <button class="preset-chip-del" data-preset-del="${p.name}" data-preset-global="${p._global ? "1" : "0"}" title="Delete">×</button>
+      </span>`).join("");
+
+    const form = this._savingPreset ? `
+      <div class="preset-form">
+        <input type="text" id="preset-name" placeholder="Name…" maxlength="24"/>
+        <label><input type="radio" name="preset-scope" value="local" checked/> This AC</label>
+        <label><input type="radio" name="preset-scope" value="global"/> Global</label>
+        <button class="preset-form-confirm" id="preset-confirm">Save</button>
+        <button class="preset-form-cancel" id="preset-cancel">Cancel</button>
+      </div>` : "";
+
+    return `
+      <div class="section-label">Presets</div>
+      ${form}
+      <div class="preset-row">
+        <button class="preset-save-btn" id="preset-save">+ Save</button>
+        ${chips}
+      </div>`;
+  }
+
   // ─── Main render ──────────────────────────────────────────────────────────
 
   _render() {
@@ -846,6 +926,49 @@ class KazemBridgeCard extends HTMLElement {
       .s-label { font-size: 10px; color: #555; }
       .s-val { font-size: 20px; font-weight: 300; color: #e0e0e0; }
       .s-unit { font-size: 10px; color: #555; }
+      .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; align-items: center; }
+      .preset-save-btn {
+        background: #2a2a3a; border: 1px dashed #444; border-radius: 8px;
+        padding: 5px 10px; cursor: pointer; color: #666; font-size: 12px; font-family: inherit;
+        transition: border-color 0.2s, color 0.2s;
+      }
+      .preset-save-btn:hover { border-color: #7b68ee; color: #7b68ee; }
+      .preset-chip {
+        display: flex; align-items: center; gap: 4px;
+        background: #2a2a3a; border: 1px solid #3a3a4a; border-radius: 8px;
+        padding: 5px 8px; font-size: 12px; font-family: inherit; color: #bbb;
+      }
+      .preset-chip-name {
+        cursor: pointer; transition: color 0.2s;
+      }
+      .preset-chip-name:hover { color: #7b68ee; }
+      .preset-chip-del {
+        background: none; border: none; color: #444; cursor: pointer;
+        font-size: 14px; line-height: 1; padding: 0 2px; font-family: inherit;
+        transition: color 0.2s;
+      }
+      .preset-chip-del:hover { color: #f44; }
+      .preset-form {
+        display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+        background: #25252f; border: 1px solid #3a3a4a; border-radius: 10px;
+        padding: 8px 10px; margin-bottom: 8px;
+      }
+      .preset-form input[type=text] {
+        background: #1c1c28; border: 1px solid #3a3a4a; border-radius: 6px;
+        color: #e0e0e0; font-size: 12px; font-family: inherit;
+        padding: 4px 8px; outline: none; flex: 1; min-width: 80px;
+      }
+      .preset-form label { font-size: 12px; color: #888; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+      .preset-form-confirm {
+        background: #7b68ee33; border: 1px solid #7b68ee; border-radius: 6px;
+        color: #7b68ee; font-size: 12px; font-family: inherit;
+        padding: 4px 10px; cursor: pointer;
+      }
+      .preset-form-cancel {
+        background: none; border: 1px solid #333; border-radius: 6px;
+        color: #555; font-size: 12px; font-family: inherit;
+        padding: 4px 8px; cursor: pointer;
+      }
     `;
 
     const html = `
@@ -897,6 +1020,8 @@ class KazemBridgeCard extends HTMLElement {
               ✦ 3D Auto${entrust ? " ON" : ""}
             </button>
           </div>
+
+          ${this._presetsHtml()}
 
           ${
             indoorT !== null || outdoorT !== null
@@ -969,6 +1094,31 @@ class KazemBridgeCard extends HTMLElement {
       .forEach((b) =>
         b.addEventListener("click", () => this._setFan(b.dataset.fan)),
       );
+
+    root.getElementById("preset-save")?.addEventListener("click", () => {
+      this._savingPreset = !this._savingPreset;
+      this._render();
+    });
+    root.getElementById("preset-confirm")?.addEventListener("click", () => {
+      const name = root.getElementById("preset-name")?.value || "";
+      const isGlobal = root.querySelector("input[name=preset-scope]:checked")?.value === "global";
+      this._savePreset(name, isGlobal);
+    });
+    root.getElementById("preset-cancel")?.addEventListener("click", () => {
+      this._savingPreset = false;
+      this._render();
+    });
+    root.querySelectorAll("[data-preset-apply]").forEach(el =>
+      el.addEventListener("click", () => {
+        try { this._applyPreset(JSON.parse(el.dataset.presetApply)); } catch {}
+      })
+    );
+    root.querySelectorAll("[data-preset-del]").forEach(btn =>
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._deletePreset(btn.dataset.presetDel, btn.dataset.presetGlobal === "1");
+      })
+    );
   }
 }
 
