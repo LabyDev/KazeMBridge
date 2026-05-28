@@ -1,6 +1,6 @@
 # KazeMBridge
 
-Home Assistant custom integration for **Mitsubishi Heavy Industries ACs** with the **WF-RAC-HTTPS** Wi-Fi adapter. Controls the AC entirely over local Wi-Fi — no cloud, no account required.
+Home Assistant custom integration for **Mitsubishi Heavy Industries ACs** with the **WF-RAC-HTTPS** Wi-Fi adapter. Controls the AC entirely over local Wi-Fi without cloud or account. Proper HomeAssistant integration.
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![GitHub release](https://img.shields.io/github/v/release/LabyDev/KazeMBridge)](https://github.com/LabyDev/KazeMBridge/releases)
@@ -39,7 +39,7 @@ Extra state attributes on the climate entity: `indoor_temp`, `outdoor_temp`, `au
 ### Setup
 
 - Go to **Settings → Integrations → Add Integration** and search for **KazeMBridge**.
-- If your adapter is on the local network, Home Assistant may detect it automatically via **mDNS** and show a discovery notification — just confirm the IP address.
+- If your adapter is on the local network, Home Assistant may detect it automatically via **mDNS** and show a discovery notification: just confirm the IP address.
 - Or add it manually by entering the adapter's local IP address.
 
 The integration generates a UUID operator ID and registers it with the AC on first setup.
@@ -73,7 +73,7 @@ The card shows:
 
 ## Auto-discovery
 
-The WF-RAC adapter advertises itself on the local network as an mDNS service of type `_beaver._tcp.local.` Home Assistant detects this automatically when KazeMBridge is installed, and will show a notification in the Integrations panel. You only need to confirm the IP address — no manual search required.
+The WF-RAC adapter advertises itself on the local network as an mDNS service of type `_beaver._tcp.local.` Home Assistant detects this automatically when KazeMBridge is installed, and will show a notification in the Integrations panel. You only need to confirm the IP address.
 
 ---
 
